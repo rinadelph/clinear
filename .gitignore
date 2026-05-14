@@ -48,3 +48,4 @@ id_ed25519*
 # Project-specific
 schema/linear-schema.json
 clinear-debug.log
+.swarm/

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.1] — 2026-05-14
+
+### Fixed
+
+- `issue create --project` and `issue update --project` now accept project **slugId**
+  (e.g. `24a5eb4e800e`) and project **name** in addition to the full UUID. Previously,
+  passing a slugId (the short identifier shown in the Linear UI) caused an
+  "Argument Validation Error" from the Linear API because the mutation's
+  `projectId` field requires the full 36-char UUID. A new `_resolve_project_id`
+  helper now resolves slugIds and names to canonical UUIDs before sending the
+  mutation, matching the resolution pattern already used for teams, labels, and
+  states.
+
+---
+
 ## [0.3.0] — 2026-05-14
 
 ### Added

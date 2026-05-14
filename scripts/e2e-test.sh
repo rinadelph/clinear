@@ -146,7 +146,7 @@ m = re.match(r'^---\n(.*?)\n---', text, re.DOTALL)
 assert m, 'frontmatter missing'
 fm = m.group(1)
 assert 'name: clinear' in fm, 'name missing/incorrect'
-assert 'version: 0.3.0' in fm, 'version must be 0.3.0'
+assert 'version: 0.3.1' in fm, 'version must be 0.3.0'
 assert '\"clinear\"' in fm, 'requires.bins must include clinear'
 print('ok')"
 

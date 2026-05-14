@@ -17,6 +17,7 @@ from clinear.filters import build_issue_filter
 from clinear.graphql import mutations, queries
 from clinear.models.enums import IssuePriority
 from clinear.models.issue import Issue
+from clinear.models.project import Project
 from clinear.models.team import Team
 from clinear.output import render
 
@@ -71,7 +72,7 @@ def create_issue(
     description: Optional[str] = typer.Option(None, "--description", "-d", help="Markdown description"),
     priority: Optional[int] = typer.Option(None, "--priority", "-p", min=0, max=4),
     assignee: Optional[str] = typer.Option(None, "--assignee", "-a", help="'me', email, or UUID"),
-    project: Optional[str] = typer.Option(None, "--project", help="Project UUID"),
+    project: Optional[str] = typer.Option(None, "--project", help="Project UUID, slugId, or name"),
     cycle: Optional[str] = typer.Option(None, "--cycle", help="Cycle UUID"),
     label: Optional[list[str]] = typer.Option(None, "--label", "-l", help="Label name(s)"),
     due_date: Optional[str] = typer.Option(None, "--due-date", help="ISO date YYYY-MM-DD"),
@@ -93,7 +94,7 @@ def update_issue(
     state: Optional[str] = typer.Option(None, "--state", "-s", help="State name"),
     assignee: Optional[str] = typer.Option(None, "--assignee", "-a", help="'me', email, or UUID"),
     priority: Optional[int] = typer.Option(None, "--priority", "-p", min=0, max=4),
-    project: Optional[str] = typer.Option(None, "--project", help="Project UUID"),
+    project: Optional[str] = typer.Option(None, "--project", help="Project UUID, slugId, or name"),
     cycle: Optional[str] = typer.Option(None, "--cycle", help="Cycle UUID"),
     due_date: Optional[str] = typer.Option(None, "--due-date", help="ISO date"),
     label: Optional[list[str]] = typer.Option(
@@ -202,6 +203,38 @@ async def _resolve_team_id(client, key: str) -> str:
     return teams[0].id
 
 
+async def _resolve_project_id(client, value: str) -> str:
+    """Resolve a project identifier (UUID, slugId, or name) to a full UUID.
+
+    Linear's ``projectId`` field in mutations requires the full 36-char UUID.
+    Users often copy the shorter ``slugId`` (e.g. ``24a5eb4e800e``) from the
+    Linear UI, which the API rejects with "Argument Validation Error".
+    This helper resolves slugIds and names to the canonical UUID.
+    """
+    if len(value) == 36 and value.count("-") == 4:
+        return value
+    # Try slugId first (most common case when copy-pasting from Linear UI)
+    projects = await client.execute_list(
+        Project, queries.PROJECTS_LIST,
+        {"filter": {"slugId": {"eq": value}}, "first": 1},
+        path=["projects"], operation="Projects",
+    )
+    if projects:
+        return projects[0].id
+    # Fallback: try name match
+    projects = await client.execute_list(
+        Project, queries.PROJECTS_LIST,
+        {"filter": {"name": {"eqIgnoreCase": value}}, "first": 1},
+        path=["projects"], operation="Projects",
+    )
+    if projects:
+        return projects[0].id
+    raise NotFoundError(
+        f"No project with UUID, slugId, or name {value!r}. "
+        "Use `clinear project list` to see available projects."
+    )
+
+
 async def _resolve_user_id(client, user: str) -> str:
     if user.lower() == "me":
         return (await get_viewer(client)).id
@@ -252,7 +285,7 @@ async def _run_create(**kwargs) -> None:
         if kwargs.get("assignee"):
             input_["assigneeId"] = await _resolve_user_id(client, kwargs["assignee"])
         if kwargs.get("project"):
-            input_["projectId"] = kwargs["project"]
+            input_["projectId"] = await _resolve_project_id(client, kwargs["project"])
         if kwargs.get("cycle"):
             input_["cycleId"] = kwargs["cycle"]
         if kwargs.get("due_date"):
@@ -301,7 +334,7 @@ async def _run_update(**kwargs) -> None:
         if kwargs.get("assignee"):
             input_["assigneeId"] = await _resolve_user_id(client, kwargs["assignee"])
         if kwargs.get("project"):
-            input_["projectId"] = kwargs["project"]
+            input_["projectId"] = await _resolve_project_id(client, kwargs["project"])
         if kwargs.get("cycle"):
             input_["cycleId"] = kwargs["cycle"]
         if kwargs.get("due_date"):
