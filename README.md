@@ -230,13 +230,7 @@ An optional Model Context Protocol server that exposes the same teaching
 content as an MCP tool, plus read-only Linear resources and prompt
 templates for common workflows.
 
-Install:
-
-```bash
-pip install 'clinear[mcp]'        # adds the mcp Python SDK
-```
-
-What it exposes:
+**What it exposes:**
 
 - **1 tool** — `clinear_guide(topic)` returns structured teaching content.
   Topics: `overview`, `commands`, `workflows`, `filters`, `output-formats`,
@@ -253,17 +247,186 @@ via the `clinear` CLI through the agent's Bash tool — the MCP tool's
 response and every prompt body include a behavioral reminder reinforcing
 this rule.
 
-Register with your MCP client:
+#### Step 1 — Install
+
+The server is an optional extra. Pick one:
+
+```bash
+# Option A — pip
+pip install 'clinear[mcp]'
+
+# Option B — uv (recommended; isolated tool install)
+uv tool install --with mcp 'clinear==0.3.0'
+
+# Option C — pipx
+pipx install 'clinear[mcp]'
+```
+
+After install, you should have **both** binaries on `PATH`:
+
+```bash
+which clinear           # /home/you/.local/bin/clinear
+which clinear-mcp       # /home/you/.local/bin/clinear-mcp
+clinear --version       # clinear 0.3.0
+```
+
+#### Step 2 — Set up the Linear token
+
+The MCP server reads the same token as the CLI. Pick one:
+
+```bash
+# Option A — env var (simplest; works for all clients)
+export LINEAR_TOKEN="<YOUR_LINEAR_TOKEN>"
+# Persist it in your shell rc:
+echo 'export LINEAR_TOKEN="<YOUR_LINEAR_TOKEN>"' >> ~/.bashrc
+# Or ~/.zshrc, ~/.config/fish/config.fish, etc.
+
+# Option B — config file (good for desktop apps that don't inherit shell env)
+clinear init                          # writes ~/.config/clinear/config.toml
+# Then edit ~/.config/clinear/config.toml:
+#   [auth]
+#   token = "<YOUR_LINEAR_TOKEN>"
+```
+
+Get your token at <https://linear.app/settings/api> (create a personal API
+key). Verify it works:
+
+```bash
+clinear me            # should print your Linear profile
+clinear auth status   # shows which token source resolved
+```
+
+> **Note for desktop MCP clients** (Claude Desktop, Cursor, etc.): GUI
+> apps usually do **not** inherit your shell's `export`s. Either put the
+> token in the config file (Option B) **or** pass it via the MCP server
+> entry's `env` block (shown below for each client).
+
+#### Step 3 — Register with your MCP client
+
+**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS,
+`%APPDATA%\Claude\claude_desktop_config.json` on Windows):
 
 ```json
 {
   "mcpServers": {
     "clinear": {
-      "command": "clinear-mcp"
+      "command": "clinear-mcp",
+      "env": {
+        "LINEAR_TOKEN": "<YOUR_LINEAR_TOKEN>"
+      }
     }
   }
 }
 ```
 
-Authentication uses the same env var (`LINEAR_TOKEN`) and config file
-(`~/.config/clinear/config.toml`) as the CLI.
+**Claude Code (CLI)** — add via the `claude mcp` command:
+
+```bash
+claude mcp add clinear clinear-mcp --env LINEAR_TOKEN=<YOUR_LINEAR_TOKEN>
+```
+
+Or edit `~/.claude.json` directly:
+
+```json
+{
+  "mcpServers": {
+    "clinear": {
+      "command": "clinear-mcp",
+      "env": { "LINEAR_TOKEN": "<YOUR_LINEAR_TOKEN>" }
+    }
+  }
+}
+```
+
+**Cursor** (`~/.cursor/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "clinear": {
+      "command": "clinear-mcp",
+      "env": { "LINEAR_TOKEN": "<YOUR_LINEAR_TOKEN>" }
+    }
+  }
+}
+```
+
+**Swarm OS** — drop the same config into your Swarm MCP config
+(`~/.swarmos/mcp/servers.json` or via `swarm mcp add`):
+
+```bash
+swarm mcp add clinear --command clinear-mcp --env LINEAR_TOKEN=<YOUR_LINEAR_TOKEN>
+```
+
+**Codex CLI** (`~/.config/codex/mcp.json`):
+
+```json
+{
+  "servers": {
+    "clinear": {
+      "command": "clinear-mcp",
+      "env": { "LINEAR_TOKEN": "<YOUR_LINEAR_TOKEN>" }
+    }
+  }
+}
+```
+
+If `clinear-mcp` is not on the system `PATH` of the GUI app (common on macOS),
+use the absolute path:
+
+```json
+{
+  "mcpServers": {
+    "clinear": {
+      "command": "/home/you/.local/bin/clinear-mcp",
+      "env": { "LINEAR_TOKEN": "<YOUR_LINEAR_TOKEN>" }
+    }
+  }
+}
+```
+
+Find the absolute path with `which clinear-mcp`.
+
+#### Step 4 — Verify the wiring
+
+Restart the MCP client and confirm the server connects. From inside the
+client you should see:
+
+- **1 tool**: `clinear_guide`
+- **2 concrete resources**: `clinear://me`, `clinear://issues/mine`
+- **5 resource templates**: `clinear://issue/{id}`, `clinear://team/{key}`,
+  `clinear://project/{id_or_slug}`, `clinear://cycle/current/{team_key}`,
+  `clinear://issues/team/{team_key}`
+- **6 prompts**: `triage`, `daily_standup`, `create_from_error`,
+  `hand_off`, `cycle_review`, `issue_investigate`
+
+If you have the MCP Inspector installed, you can also smoke-test from a
+terminal:
+
+```bash
+npx @modelcontextprotocol/inspector clinear-mcp
+```
+
+This launches a browser UI that lets you list tools/resources/prompts and
+invoke them interactively.
+
+For a quick stdio sanity check without the Inspector:
+
+```bash
+(echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}'
+ echo '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+ echo '{"jsonrpc":"2.0","id":2,"method":"tools/list"}') | clinear-mcp | head -3
+```
+
+You should see a JSON-RPC initialize response followed by `tools/list`
+returning `clinear_guide`.
+
+#### Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `clinear-mcp: command not found` in GUI app | Use absolute path in the MCP config (`which clinear-mcp`) |
+| Server starts but resource reads return auth error | Token not visible to the server — pass it via the config's `env` block instead of relying on shell `export` |
+| `pip install 'clinear[mcp]'` fails with quoting error | Some shells eat the brackets — quote the whole spec or escape: `pip install clinear\[mcp\]` |
+| Tool list is empty in client | Restart the MCP client after editing the config; some clients cache `tools/list` |
+| Stdout looks corrupted | Don't run `clinear-mcp` interactively — it speaks JSON-RPC on stdin/stdout. Logs go to stderr. |
