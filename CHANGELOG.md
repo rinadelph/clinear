@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.0] — 2026-05-14
+
+### Added
+
+- **Agent skill bundle** at `skills/clinear/` — a Swarm/Claude-style skill
+  (SKILL.md frontmatter + `references/*.md`) that teaches AI agents both the
+  mechanics of the CLI and the *behavior* of working through Linear (when to
+  search before create, when to use `--output json`, how to chain commands,
+  safety rules, anti-patterns). Install with `bash skills/install.sh`.
+- **`clinear-mcp` MCP server** — optional Model Context Protocol server
+  exposing:
+  - **1 tool** `clinear_guide(topic)` returning structured teaching content
+    (`overview` / `commands` / `workflows` / `filters` / `output-formats`
+    / `examples`).
+  - **7 read-only resources**: `clinear://me`, `clinear://issue/{id}`,
+    `clinear://team/{key}`, `clinear://project/{id_or_slug}`,
+    `clinear://cycle/current/{team_key}`, `clinear://issues/mine`,
+    `clinear://issues/team/{team_key}`.
+  - **6 prompt templates**: `triage`, `daily_standup`, `create_from_error`,
+    `hand_off`, `cycle_review`, `issue_investigate`.
+- **By design no mutation tools** on the MCP server. Mutations happen via
+  the `clinear` CLI in a shell — every tool/prompt response carries a
+  reminder reinforcing this rule.
+- `clinear/skill_content/` — canonical markdown source bundled inside the
+  wheel via `[tool.hatch.build.targets.wheel.force-include]`. Single source
+  of truth for both the skill bundle and the MCP server.
+- New optional dependency extra: `pip install 'clinear[mcp]'` pulls in
+  `mcp>=1.12.0`. Core install stays untouched for users who don't need MCP.
+- New console script `clinear-mcp` (entry point of the MCP server).
+
+### Changed
+
+- Bumped version to 0.3.0.
+- Updated User-Agent string emitted by `LinearClient` to `clinear/0.3.0`.
+
+### Notes
+
+- The MCP code is **lazy-imported**. Users who install `clinear` without the
+  `[mcp]` extra are not affected; the `clinear-mcp` script prints a friendly
+  install hint and exits 2 if invoked without the dep.
+- ALL MCP server logging is routed to stderr to keep stdio JSON-RPC clean.
+
+---
+
 ## [0.2.0] — 2026-05-14
 
 ### Added

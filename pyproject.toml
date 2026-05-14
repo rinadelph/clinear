@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "clinear"
-version = "0.2.0"
+version = "0.3.0"
 description = "Type-safe Linear CLI built on Pydantic v2"
 readme = "README.md"
 license = { text = "MIT" }
@@ -43,9 +43,13 @@ dev = [
     "mypy>=1.13",
     "respx>=0.21",
 ]
+mcp = [
+    "mcp>=1.12.0",
+]
 
 [project.scripts]
 clinear = "clinear.cli:app"
+clinear-mcp = "clinear.mcp.server:main"
 
 [project.urls]
 Homepage = "https://github.com/Clover/clinear"

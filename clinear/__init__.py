@@ -15,7 +15,7 @@ def _read_version() -> str:
             return version_file.read_text(encoding="utf-8").strip()
     except OSError:
         pass
-    return "0.2.0"
+    return "0.3.0"
 
 
 __version__ = _read_version()

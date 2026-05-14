@@ -6,7 +6,7 @@
 
 ## TL;DR (the rules)
 
-1. **Every change bumps the version.** Patch for bugfixes (0.2.0 → 0.2.1), minor for features (0.2.x → 0.3.0), major for breaking changes.
+1. **Every change bumps the version.** Patch for bugfixes (0.3.0 → 0.3.1), minor for features (0.3.x → 0.4.0), major for breaking changes.
 2. **Every change updates `CHANGELOG.md`** under a new version heading.
 3. **Every change is tested.** Run `bash scripts/e2e-test.sh` before commit. All 36+ tests must pass.
 4. **Every commit goes through the pre-commit hook.** No secrets, no `.log`, no `.env`, no `schema/linear-schema.json`.
@@ -34,7 +34,25 @@ clinear/
 │   ├── errors.py              Typed exit codes
 │   ├── models/                Pydantic v2 models (User, Team, Issue, ...)
 │   ├── graphql/               Query/mutation strings + fragments
-│   └── commands/              One file per command group
+│   ├── commands/              One file per command group
+│   ├── skill_content/         Canonical markdown for the agent skill (shipped in wheel)
+│   │   ├── overview.md
+│   │   ├── commands.md
+│   │   ├── workflows.md
+│   │   ├── filters.md
+│   │   ├── output-formats.md
+│   │   └── examples.md
+│   └── mcp/                   Optional MCP server (`pip install 'clinear[mcp]'`)
+│       ├── content.py         ClinearGuide Pydantic model + load_topic()
+│       ├── resources.py       7 read-only resource handlers
+│       ├── prompts.py         6 workflow prompt templates
+│       └── server.py          FastMCP wire-up; entry point of `clinear-mcp`
+│
+├── skills/                    Agent skill bundle (installable into ~/.swarmos and ~/.claude)
+│   ├── install.sh             Symlinks skills/clinear into both skill dirs
+│   └── clinear/
+│       ├── SKILL.md           Frontmatter + body (mechanics + behavior + safety)
+│       └── references/        Symlinks → ../../clinear/skill_content/*.md
 │
 ├── schema/
 │   ├── linear-schema.json     2.3 MB introspection result (GITIGNORED)
@@ -161,7 +179,7 @@ Pass condition: `SUMMARY: N passed, 0 failed`.
 
 ### Unit tests (TODO — v0.3)
 
-`tests/` is empty as of v0.2.0. Planned with `pytest` + `respx` (mocks httpx) + Pydantic fixture data.
+`tests/` is empty as of v0.3.0. Planned with `pytest` + `respx` (mocks httpx) + Pydantic fixture data.
 
 ---
 
@@ -171,8 +189,8 @@ We follow [Semantic Versioning](https://semver.org/):
 
 | Bump | When |
 |------|------|
-| **Patch** `0.2.0 → 0.2.1` | Bugfixes, typo corrections, internal refactors with no behavior change. |
-| **Minor** `0.2.x → 0.3.0` | New commands, new flags, new output formats. Backward-compatible. |
+| **Patch** `0.3.0 → 0.3.1` | Bugfixes, typo corrections, internal refactors with no behavior change. |
+| **Minor** `0.3.x → 0.4.0` | New commands, new flags, new output formats. Backward-compatible. |
 | **Major** `0.x → 1.0` (then `1 → 2`) | Removed/renamed commands, changed exit codes, changed default output. |
 
 ### Version bump checklist (every change)
@@ -311,7 +329,8 @@ It also blocks these file types entirely:
 
 ## Roadmap
 
-- v0.3 — pytest unit tests, hash-pinned `requirements.txt`, `docs/COMMANDS.md`, `clinear completions` for shell completion install
-- v0.4 — `clinear initiative`, `clinear document`, `clinear customer` (next-tier domains)
-- v0.5 — config-defined views (`--view my-bugs`), aliases
+- v0.3 (current) — agent skill bundle + `clinear-mcp` MCP server (1 tool + 7 resources + 6 prompts).
+- v0.4 — pytest unit tests, hash-pinned `requirements.txt`, `docs/COMMANDS.md`, `clinear completions` for shell completion install
+- v0.5 — `clinear initiative`, `clinear document`, `clinear customer` (next-tier domains)
+- v0.6 — config-defined views (`--view my-bugs`), aliases
 - v1.0 — stable command surface, full integration with the 8 priority domains

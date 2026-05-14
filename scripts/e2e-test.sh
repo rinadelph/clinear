@@ -112,6 +112,44 @@ run_test "raw query" $CLI raw query 'query { viewer { id name email } }'
 EXPECT_FAIL=1 run_test "non-existent team (expect error 4)" $CLI team get NONEXISTENT
 EXPECT_FAIL=1 run_test "non-existent issue (expect error 4)" $CLI issue get FAKE-9999
 
+# --- MCP / Skill smoke tests (no live API; pure-Python import + content) ---
+run_test "mcp: content module imports + loads all topics" \
+    python3 -c "from clinear.mcp.content import Topic, ClinearGuide, load_topic
+for t in Topic:
+    g = load_topic(t)
+    assert isinstance(g, ClinearGuide), f'{t}: bad type'
+    assert g.title, f'{t}: missing title'
+    assert g.instructions, f'{t}: empty instructions'
+print('ok')"
+
+run_test "mcp: resources module imports without mcp SDK" \
+    python3 -c "from clinear.mcp import resources; assert callable(resources.viewer); print('ok')"
+
+run_test "mcp: prompts module produces non-empty templates" \
+    python3 -c "from clinear.mcp import prompts
+for fn, args in [(prompts.triage, ('CLO',)),
+                  (prompts.daily_standup, ()),
+                  (prompts.hand_off, ('CLO-1', 'Bob', 'note')),
+                  (prompts.cycle_review, ('CLO',)),
+                  (prompts.issue_investigate, ('CLO-1',)),
+                  (prompts.create_from_error, ('TypeError', 'CLO', 2))]:
+    out = fn(*args)
+    assert isinstance(out, str) and len(out) > 100, f'{fn.__name__}: too short'
+    assert 'clinear' in out, f'{fn.__name__}: no clinear command'
+    assert 'REMINDER' in out, f'{fn.__name__}: missing reminder'
+print('ok')"
+
+run_test "skill: SKILL.md frontmatter is valid YAML and lists clinear bin" \
+    python3 -c "import re, pathlib
+text = pathlib.Path('skills/clinear/SKILL.md').read_text()
+m = re.match(r'^---\n(.*?)\n---', text, re.DOTALL)
+assert m, 'frontmatter missing'
+fm = m.group(1)
+assert 'name: clinear' in fm, 'name missing/incorrect'
+assert 'version: 0.3.0' in fm, 'version must be 0.3.0'
+assert '\"clinear\"' in fm, 'requires.bins must include clinear'
+print('ok')"
+
 echo ""
 echo "================================================================"
 echo "SUMMARY: $PASS passed, $FAIL failed"

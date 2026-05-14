@@ -195,3 +195,75 @@ bash scripts/e2e-test.sh         # 36/36 should pass
 ## License
 
 MIT — see [LICENSE](./LICENSE).
+
+---
+
+## For AI agents — Skill & MCP server
+
+clinear ships with two artifacts specifically for AI coding agents:
+
+### 1. Agent skill bundle
+
+A Swarm/Claude-style skill that teaches an agent both the mechanics of
+`clinear` and the *behavior* of working through Linear (search before
+create, use `--output json` for pipes, chain commands in shell instead of
+writing Python, etc.).
+
+Install:
+
+```bash
+git clone https://github.com/rinadelph/clinear.git
+cd clinear
+bash skills/install.sh
+```
+
+This symlinks `skills/clinear/` into BOTH:
+
+- `~/.swarmos/skills/clinear/` (for Swarm OS)
+- `~/.claude/skills/clinear/` (for Claude Code / Claude Desktop)
+
+Flags: `--swarm-only`, `--claude-only`, `--copy` (no symlinks), `--uninstall`.
+
+### 2. MCP server (`clinear-mcp`)
+
+An optional Model Context Protocol server that exposes the same teaching
+content as an MCP tool, plus read-only Linear resources and prompt
+templates for common workflows.
+
+Install:
+
+```bash
+pip install 'clinear[mcp]'        # adds the mcp Python SDK
+```
+
+What it exposes:
+
+- **1 tool** — `clinear_guide(topic)` returns structured teaching content.
+  Topics: `overview`, `commands`, `workflows`, `filters`, `output-formats`,
+  `examples`.
+- **7 read-only resources** — `clinear://me`, `clinear://issue/{id}`,
+  `clinear://team/{key}`, `clinear://project/{id_or_slug}`,
+  `clinear://cycle/current/{team_key}`, `clinear://issues/mine`,
+  `clinear://issues/team/{team_key}`.
+- **6 prompts** — `triage`, `daily_standup`, `create_from_error`,
+  `hand_off`, `cycle_review`, `issue_investigate`.
+
+**The server exposes NO mutation tools** by design. Mutations are performed
+via the `clinear` CLI through the agent's Bash tool — the MCP tool's
+response and every prompt body include a behavioral reminder reinforcing
+this rule.
+
+Register with your MCP client:
+
+```json
+{
+  "mcpServers": {
+    "clinear": {
+      "command": "clinear-mcp"
+    }
+  }
+}
+```
+
+Authentication uses the same env var (`LINEAR_TOKEN`) and config file
+(`~/.config/clinear/config.toml`) as the CLI.
