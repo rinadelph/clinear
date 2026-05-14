@@ -1,0 +1,84 @@
+"""`clinear init` — scaffold the config file at the standard location."""
+
+from __future__ import annotations
+
+import os
+import typer
+
+from clinear.config import config_path
+
+init_app = typer.Typer(help="Initialize clinear configuration")
+
+
+CONFIG_TEMPLATE = """\
+# clinear configuration file
+# Location: __CONFIG_PATH__
+#
+# Token resolution order:
+#   1. --token CLI flag
+#   2. $LINEAR_TOKEN environment variable (recommended)
+#   3. [auth].token below (discouraged: plaintext in dotfiles)
+
+[auth]
+# Environment variable to read the token from. Default: LINEAR_TOKEN.
+token_env = "LINEAR_TOKEN"
+# Uncomment to store the token here directly (not recommended):
+# token = "lin_api_..."
+
+[defaults]
+# Default team key — used when commands accept --team but you omit it.
+# team = "ENG"
+output = "human"
+# editor = "$EDITOR"
+
+[display]
+color = true
+table_max_width = 120
+truncate_descriptions = 80
+
+# Named filter aliases. Use with: clinear issue list --view <name>
+# (Not yet wired up in v0.2 — reserved.)
+[views]
+# my-open-bugs = { assignee = "me", label = "Bug", "state.type" = "!completed" }
+# team-blockers = { team = "ENG", priority = 1, "state.type" = "started" }
+"""
+
+
+@init_app.callback(invoke_without_command=True)
+def init(
+    ctx: typer.Context,
+    force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing config"),
+    path: str | None = typer.Option(
+        None, "--path", help="Write to this path instead of the default"
+    ),
+) -> None:
+    """Create a starter config file at the standard location."""
+    if ctx.invoked_subcommand is not None:
+        return
+    target = config_path() if path is None else _to_path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists() and not force:
+        typer.echo(
+            f"Config already exists at {target}. Use --force to overwrite.",
+            err=True,
+        )
+        raise typer.Exit(2)
+    target.write_text(
+        CONFIG_TEMPLATE.replace("__CONFIG_PATH__", str(target)),
+        encoding="utf-8",
+    )
+    try:
+        os.chmod(target, 0o600)
+    except OSError:
+        pass
+    typer.echo(f"Created {target}")
+    typer.echo("")
+    typer.echo("Next steps:")
+    typer.echo(f"  1. export LINEAR_TOKEN=\"lin_api_...\"  # or edit {target}")
+    typer.echo("  2. clinear me  # verify it works")
+
+
+def _to_path(p: str):
+    from pathlib import Path
+
+    return Path(p).expanduser().resolve()

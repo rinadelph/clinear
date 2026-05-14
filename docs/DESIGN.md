@@ -1,0 +1,431 @@
+# clinear — Design Document
+
+> Linear CLI built in Python with Pydantic v2 + httpx + Typer
+> Designed for: humans, agents, CI/CD, and shell pipelines
+
+---
+
+## Philosophy
+
+1. **Type-safe everything.** Every API response is a validated Pydantic model. No `dict[str, Any]` leaks into business logic.
+2. **Agent-first, human-second.** JSON output is the canonical contract. Human-friendly tables are a presentation layer on top.
+3. **Composable.** Every command works in pipelines (`clinear issue list | jq | xargs ...`).
+4. **Idempotent where possible.** Re-running a command shouldn't break state.
+5. **Fast.** Async by default. Concurrent fetches where safe.
+6. **Discoverable.** `clinear --help`, `clinear issue --help`, `clinear issue create --help` should be sufficient.
+7. **Honest errors.** Linear API errors surfaced verbatim with context. No silent failures.
+
+---
+
+## API Surface (from introspection)
+
+- **151 root queries**
+- **353 root mutations**
+- **519 object types**
+- **371 input types**
+- **92 enums**
+
+v1 covers the 8 highest-value domains. v2+ expands.
+
+---
+
+## Domain Priority
+
+| Tier | Domain | Queries | Mutations | v1? |
+|------|--------|---------|-----------|-----|
+| Core | issue | 17 | 34 | ✅ |
+| Core | team | 3 | 9 | ✅ |
+| Core | user (viewer/me) | 3 | 12 | ✅ |
+| Core | workflow (states) | 2 | 3 | ✅ |
+| High | project | 13 | 31 | ✅ |
+| High | cycle | 1 | 5 | ✅ |
+| High | comment | 1 | 5 | ✅ |
+| High | label | (under issue) | - | ✅ |
+| Med  | initiative | 7 | 17 | v2 |
+| Med  | document | 3 | 4 | v2 |
+| Med  | customer | 7 | 18 | v2 |
+| Med  | attachment | 3 | 15 | v2 |
+| Low  | integration | 4 | 59 | v3 |
+| Low  | webhook | 1 | 4 | v3 |
+| Low  | roadmap | 3 | 8 | v3 |
+| Low  | agent (Linear's AI) | 5 | 9 | v3 |
+
+---
+
+## Command Hierarchy
+
+```
+clinear
+├── auth                    # Token management
+│   ├── login               # Interactive: prompt for token, validate, store
+│   ├── status              # Show authenticated user
+│   ├── logout              # Clear stored token
+│   └── whoami              # Alias for `me`
+│
+├── me                      # Viewer (current user) info
+│
+├── issue                   # Issues (most-used domain)
+│   ├── list                # List issues with filters
+│   ├── get <id>            # Get single issue (full detail)
+│   ├── create              # Create issue (interactive or flags)
+│   ├── update <id>         # Update fields
+│   ├── delete <id>         # Archive issue
+│   ├── assign <id> <user>  # Quick reassign
+│   ├── state <id> <state>  # Change workflow state
+│   ├── prio <id> <0-4>     # Change priority
+│   ├── label <id> +Bug -Fix # Add/remove labels
+│   ├── comment <id> <body> # Add comment
+│   ├── open <id>           # Open in browser
+│   ├── url <id>            # Print URL
+│   └── search <query>      # Full-text search
+│
+├── team                    # Teams
+│   ├── list
+│   ├── get <key>           # by key (ENG) or id
+│   ├── members <key>
+│   └── states <key>        # Workflow states for team
+│
+├── project                 # Projects
+│   ├── list
+│   ├── get <id|name>
+│   ├── create
+│   ├── update <id>
+│   ├── issues <id>         # Issues in project
+│   └── archive <id>
+│
+├── cycle                   # Cycles (sprints)
+│   ├── current [team]      # Current cycle
+│   ├── list [team]
+│   ├── issues [cycle-id]   # Issues in cycle
+│   └── next [team]         # Next upcoming cycle
+│
+├── comment                 # Comments
+│   ├── list <issue-id>
+│   ├── add <issue-id> <body>
+│   ├── edit <comment-id>
+│   └── delete <comment-id>
+│
+├── label                   # Labels
+│   ├── list [team]
+│   ├── create <name> [team]
+│   └── delete <id>
+│
+├── workflow                # Workflow states
+│   └── states [team]
+│
+├── search <query>          # Cross-entity search
+│
+├── config                  # CLI configuration
+│   ├── get <key>
+│   ├── set <key> <value>
+│   ├── list
+│   └── path                # Show config file path
+│
+├── completions             # Shell completion install
+│   ├── bash
+│   ├── zsh
+│   └── fish
+│
+└── raw                     # Escape hatch: arbitrary GraphQL
+    └── query <query-string>
+```
+
+---
+
+## Output Formats
+
+Every command supports `--output` / `-o`:
+
+| Format | Flag | Use Case |
+|--------|------|----------|
+| `human` | default | Pretty tables, colors, emoji-free |
+| `json` | `-o json` | Agents, scripts, pipelines |
+| `plain` | `-o plain` | Tab-separated, no colors (legacy pipelines) |
+| `yaml` | `-o yaml` | Human-readable configs, exports |
+| `markdown` | `-o md` | Reports, docs, embedding in PRs |
+| `ids` | `-o ids` | Just IDs, one per line (great for xargs) |
+
+---
+
+## Global Flags
+
+```
+--token TEXT            Override LINEAR_TOKEN env var
+--workspace TEXT        Workspace override (multi-workspace future)
+--config PATH           Use specific config file
+--output, -o FORMAT     Output format (default: human)
+--no-color              Disable ANSI colors
+--quiet, -q             Suppress non-essential output
+--verbose, -v           Show GraphQL queries and response timing
+--dry-run               Print mutation that would be sent; don't execute
+--timeout INT           HTTP timeout in seconds (default: 30)
+--help, -h              Show help
+--version               Print version and exit
+```
+
+---
+
+## Filter DSL (Issue list example)
+
+Linear's GraphQL has powerful filter inputs. We expose them ergonomically:
+
+```bash
+# Simple flags
+clinear issue list --team ENG --state "In Progress" --assignee me
+
+# Filter by relations
+clinear issue list --project "Q2 Roadmap" --label Bug
+
+# Date filters (ISO 8601 durations supported)
+clinear issue list --updated "-P7D"          # Updated in last 7 days
+clinear issue list --due-before "2026-06-01"
+
+# Multiple states (OR)
+clinear issue list --state "Todo,In Progress"
+
+# Negation
+clinear issue list --not-state "Done"
+
+# Free-text within structured filter
+clinear issue list --team ENG --contains "auth bug"
+
+# Saved views (named filters in config)
+clinear issue list --view "my-open-bugs"
+```
+
+---
+
+## Config File
+
+Location precedence:
+1. `$CLINEAR_CONFIG` env var
+2. `$XDG_CONFIG_HOME/clinear/config.toml`
+3. `~/.config/clinear/config.toml`
+
+```toml
+# ~/.config/clinear/config.toml
+
+[auth]
+token_env = "LINEAR_TOKEN"  # Read from env, never store plaintext
+# Or for users who want it stored:
+# token = "lin_api_..."
+
+[defaults]
+team = "ENG"                # Default team key
+output = "human"            # Default output format
+editor = "$EDITOR"          # For multi-line input
+
+[display]
+color = true
+table_max_width = 120
+truncate_descriptions = 80
+
+[aliases]
+mine = "issue list --assignee me --state-type !completed"
+bugs = "issue list --label Bug --state-type started"
+todo = "issue list --state Todo --assignee me"
+
+[views]
+"my-open-bugs" = { assignee = "me", label = "Bug", "state.type" = "!completed" }
+"team-blockers" = { team = "ENG", priority = 1, "state.type" = "started" }
+```
+
+---
+
+## User Stories
+
+### Story 1: Quick triage (most common)
+```bash
+$ clinear me                              # confirm auth
+$ clinear issue list --assignee me        # what's on my plate
+$ clinear issue get ENG-123               # full detail
+$ clinear issue state ENG-123 "In Progress"
+$ clinear issue comment ENG-123 "Starting work on this"
+```
+
+### Story 2: Sprint planning
+```bash
+$ clinear cycle current ENG               # what's the current cycle
+$ clinear cycle issues                    # issues in current cycle
+$ clinear issue list --no-cycle --team ENG --state Todo | head -20
+$ clinear issue update ENG-200 --cycle current
+```
+
+### Story 3: Bulk operations (agents/scripts)
+```bash
+# Find all stale bugs and assign to me
+$ clinear issue list \
+    --label Bug --state Todo --updated "-P30D" \
+    -o ids | \
+  xargs -I {} clinear issue update {} --assignee me
+
+# Export to markdown for weekly report
+$ clinear issue list --assignee me --updated "-P7D" \
+    -o md > weekly-report.md
+```
+
+### Story 4: Project status check
+```bash
+$ clinear project list --state started
+$ clinear project get "Q2 Roadmap"
+$ clinear project issues "Q2 Roadmap" --state "!completed"
+```
+
+### Story 5: Agent integration
+```bash
+# Get JSON for an LLM to process
+$ clinear issue get ENG-123 -o json
+
+# Create from agent
+$ clinear issue create \
+    --team ENG \
+    --title "Auth bug in login flow" \
+    --description "$(cat error-report.md)" \
+    --label Bug --priority 1 \
+    -o json
+```
+
+### Story 6: Escape hatch
+```bash
+# Need a query clinear doesn't expose? Drop to raw GraphQL.
+$ clinear raw query 'query { viewer { id name email } }'
+```
+
+---
+
+## Error Handling
+
+```
+Exit codes:
+  0   Success
+  1   Generic error
+  2   Usage error (bad flags)
+  3   Auth error (missing/invalid token)
+  4   Not found (entity doesn't exist)
+  5   Validation error (Pydantic model failure)
+  6   API error (Linear returned error)
+  7   Network error (timeout, DNS, TLS)
+  8   Rate limited
+```
+
+All errors go to stderr. Success output to stdout.
+
+Error format (JSON mode):
+```json
+{
+  "error": {
+    "type": "NotFound",
+    "message": "Issue ENG-9999 not found",
+    "code": 4,
+    "linear_error": null
+  }
+}
+```
+
+---
+
+## Security
+
+- **Token never logged.** Redacted in `--verbose` mode (shown as `lin_api_…XXXX`).
+- **Token never stored in plaintext by default.** Read from env or via `--token`.
+- **HTTPS only.** No fallback to HTTP.
+- **TLS verification mandatory.** No `--insecure` flag.
+- **Pinned dependencies.** `requirements.txt` includes hashes.
+- **No telemetry.** Zero outbound calls except to `api.linear.app`.
+
+---
+
+## Project Structure
+
+```
+clinear/
+├── pyproject.toml          # Modern Python project metadata
+├── README.md               # Quick start
+├── LICENSE                 # MIT
+├── .gitignore
+├── .python-version         # 3.10+
+├── requirements.txt        # Hashed runtime deps
+├── requirements-dev.txt    # Test/lint deps
+│
+├── clinear/                # Package root
+│   ├── __init__.py         # Version, entry point
+│   ├── __main__.py         # python -m clinear
+│   ├── cli.py              # Typer app, global flags, root command
+│   ├── config.py           # Config loading/validation
+│   ├── client.py           # Async GraphQL client
+│   ├── output.py           # Output formatters (human/json/md/yaml)
+│   ├── errors.py           # Error hierarchy + exit codes
+│   ├── auth.py             # Token resolution + viewer cache
+│   ├── filters.py          # Filter DSL → Linear IssueFilter input
+│   │
+│   ├── commands/           # One file per command group
+│   │   ├── __init__.py
+│   │   ├── issue.py
+│   │   ├── team.py
+│   │   ├── project.py
+│   │   ├── cycle.py
+│   │   ├── comment.py
+│   │   ├── label.py
+│   │   ├── workflow.py
+│   │   ├── search.py
+│   │   ├── config_cmd.py   # 'config' is a builtin
+│   │   ├── auth_cmd.py
+│   │   └── raw.py
+│   │
+│   ├── models/             # Pydantic v2 models
+│   │   ├── __init__.py
+│   │   ├── base.py         # LinearModel, Connection[T], PageInfo
+│   │   ├── user.py
+│   │   ├── team.py
+│   │   ├── issue.py
+│   │   ├── project.py
+│   │   ├── cycle.py
+│   │   ├── comment.py
+│   │   ├── workflow.py
+│   │   ├── label.py
+│   │   └── enums.py        # All Linear enums
+│   │
+│   └── graphql/            # Query/mutation string templates
+│       ├── __init__.py
+│       ├── fragments.py    # Shared GraphQL fragments
+│       ├── queries.py      # Query strings
+│       └── mutations.py    # Mutation strings
+│
+├── schema/
+│   ├── linear-schema.json  # Full introspection result (gitignored if too large)
+│   └── schema-summary.json # Categorized
+│
+├── tests/
+│   ├── __init__.py
+│   ├── conftest.py
+│   ├── test_client.py
+│   ├── test_filters.py
+│   ├── test_models.py
+│   ├── test_output.py
+│   └── fixtures/           # Recorded GraphQL responses
+│
+└── docs/
+    ├── DESIGN.md           # This file
+    ├── COMMANDS.md         # Generated reference
+    ├── FILTERS.md          # Filter DSL reference
+    └── EXAMPLES.md         # Recipe book
+```
+
+---
+
+## v1 Acceptance Criteria
+
+- [ ] `clinear me` returns viewer info
+- [ ] `clinear team list` works
+- [ ] `clinear issue list` with `--team`, `--state`, `--assignee`, `--label` filters
+- [ ] `clinear issue get <id>` shows full issue detail
+- [ ] `clinear issue create` with all common flags
+- [ ] `clinear issue update <id>` for state/assignee/priority/labels
+- [ ] `clinear cycle current` returns current cycle for a team
+- [ ] `clinear project list` and `project get`
+- [ ] Output formats: human, json, ids, plain
+- [ ] `--dry-run` shows mutation without executing
+- [ ] All commands validated against Pydantic models
+- [ ] Errors return proper exit codes
+- [ ] Test coverage > 80%
+- [ ] Works on Python 3.10, 3.11, 3.12, 3.13
