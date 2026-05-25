@@ -257,3 +257,51 @@ your MCP client config:
 
 The MCP server is read-only by design. Mutations go through this skill's
 `clinear` shell commands.
+
+---
+
+## Config file keeps getting corrupted
+
+The `~/.config/clinear/config.toml` can revert to an old multi-account schema clinear no longer accepts. Fix by rewriting minimal schema before use:
+
+```bash
+printf '[auth]\ntoken = "lin_api_..."\n' > ~/.config/clinear/config.toml
+```
+
+Or bypass config entirely with the `--token` global flag:
+
+```bash
+TOKEN="lin_api_..."
+clinear --token "$TOKEN" issue list --team SWA
+```
+
+## Bulk reassign issues from one user to me
+
+```bash
+# Find all issues by handle
+clinear issue list --team SWA --assignee deltaragaming 2>&1
+
+# Reassign in a loop
+for id in SWA-47 SWA-46 SWA-45; do
+  clinear issue assign "$id" me 2>&1
+done
+```
+
+## Fetch full issue descriptions (for dashboards)
+
+`-o plain` gives one-liners only. Use `-o json` + python3 for description:
+
+```bash
+clinear --token "$TOKEN" -o json issue get SWA-50 2>/dev/null | python3 -c "
+import json,sys; d=json.load(sys.stdin)
+print('Title:', d.get('title',''))
+print('Description:', (d.get('description') or '')[:800])
+"
+```
+
+## HTML issue dashboard
+
+Generate a self-contained HTML board at a permanent path (not /tmp):
+- `/home/swarm/Work/mono/swarm-board.html`
+- Include: stats header, Mermaid dependency map, progress bars, issue cards with DoD checklists
+- Serve: `python3 -m http.server 8888` then `register_deployment(port=8888)`

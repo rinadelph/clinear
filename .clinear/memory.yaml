@@ -1,0 +1,54 @@
+---
+version: 1
+forced:
+  - id: verify-auth-first
+    priority: 1
+    title: Verify auth before any mutation
+    body: Always run `clinear me` first. If it fails, stop and surface the auth error to the user before any mutation.
+    created_by: system
+    created_at: '2026-05-25T22:09:45.059918+00:00'
+    last_updated: '2026-05-25T22:09:45.059930+00:00'
+    auto_heal: false
+    heal_after_days: 0
+  - id: search-before-create
+    priority: 2
+    title: Search before creating issues
+    body: Run `clinear issue search "<query>"` before `clinear issue create` to avoid duplicate issues.
+    created_by: system
+    created_at: '2026-05-25T22:09:45.059932+00:00'
+    last_updated: '2026-05-25T22:09:45.059933+00:00'
+    auto_heal: false
+    heal_after_days: 0
+  - id: use-json-for-piping
+    priority: 3
+    title: Use --output json for programmatic reading
+    body: `--output human` is for terminal display only. Use `-o json` when piping, filtering, or feeding into another tool.
+    created_by: system
+    created_at: '2026-05-25T22:09:45.059935+00:00'
+    last_updated: '2026-05-25T22:09:45.059936+00:00'
+    auto_heal: false
+    heal_after_days: 0
+  - id: dry-run-on-ambiguous
+    priority: 4
+    title: Use --dry-run on ambiguous mutations
+    body: When the user's intent is ambiguous or destructive, use `clinear <cmd> --dry-run` first to preview before executing.
+    created_by: system
+    created_at: '2026-05-25T22:09:45.059937+00:00'
+    last_updated: '2026-05-25T22:09:45.059938+00:00'
+    auto_heal: false
+    heal_after_days: 0
+community:
+  - id: clover-uses-clo-prefix
+    priority: 3
+    title: Clover uses CLO prefix
+    body: The Clover team key is CLO. Use it for issue creation and team queries.
+    created_by: agent
+    created_at: '2026-05-25T22:09:45.060020+00:00'
+    last_updated: '2026-05-25T22:09:45.060021+00:00'
+  - id: swarm-uses-swa-prefix
+    priority: 3
+    title: Swarm uses SWA prefix
+    body: The Swarmcode team key is SWA. Different org from Clover.
+    created_by: agent
+    created_at: '2026-05-25T22:09:45.209871+00:00'
+    last_updated: '2026-05-25T22:09:45.209872+00:00'

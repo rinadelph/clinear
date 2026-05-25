@@ -24,7 +24,8 @@ Use `clinear` via the **Bash tool** whenever a task touches Linear:
 ## Behavioral rules (read these before invoking)
 
 1. **Verify auth first in a fresh shell:** `clinear me`. If it fails, stop and surface the auth error to the user before any mutation.
-2. **Discover accounts before assuming defaults.** When working across multiple Linear organizations, run `clinear -o json auth accounts` to see available accounts and their org names. Use `--account <name>` for one-off switches or `clinear auth workspace` to verify auto-detection.
+2. **Read the memory board before starting work.** Run `clinear memory remind` first to load forced rules and recent project context. If you learn something useful, add it with `clinear memory add --title "..." --body "..."`. Stale entries auto-heal after 30 days.
+3. **Discover accounts before assuming defaults.** When working across multiple Linear organizations, run `clinear -o json auth accounts` to see available accounts and their org names. Use `--account <name>` for one-off switches or `clinear auth workspace` to verify auto-detection.
 3. **Search before create.** `clinear issue search "<query>"` prevents duplicate issues. Always run this when the user says "create an issue about X" unless they already gave you an explicit identifier.
 4. **Use `--output json` when piping or programmatically reading.** `--output human` is for terminal display only.
 5. **Linear identifiers are case-sensitive.** Use `CLO-35`, never `clo-35`.
@@ -46,6 +47,11 @@ clinear auth switch <NAME>           # set default
 clinear auth workspace              # show current workspace + mapped account
 clinear init                        # write config file
 clinear update                      # self-update from PyPI
+
+clinear memory remind               # read memory board before work
+clinear memory add --title "..." --body "..."  # add what you learned
+clinear memory list                 # all entries
+clinear memory heal                 # remove stale community entries
 
 clinear team list
 clinear team get <KEY>              # e.g. CLO

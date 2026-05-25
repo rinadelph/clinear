@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "clinear"
-version = "0.4.0"
+version = "0.4.1"
 description = "Type-safe Linear CLI built on Pydantic v2"
 readme = "README.md"
 license = { text = "MIT" }

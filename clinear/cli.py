@@ -19,6 +19,7 @@ from clinear.commands.cycle import cycle_app
 from clinear.commands.init import init_app
 from clinear.commands.issue import issue_app
 from clinear.commands.label import label_app
+from clinear.commands.memory import memory_app
 from clinear.commands.project import project_app
 from clinear.commands.raw import raw_app
 from clinear.commands.team import team_app
@@ -95,6 +96,7 @@ app.add_typer(project_app, name="project")
 app.add_typer(cycle_app, name="cycle")
 app.add_typer(comment_app, name="comment")
 app.add_typer(label_app, name="label")
+app.add_typer(memory_app, name="memory")
 app.add_typer(raw_app, name="raw")
 app.add_typer(update_app, name="update")
 

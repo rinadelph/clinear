@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.1] — 2026-05-25
+
+### Added
+
+- **Project memory board** (`clinear memory`) — persistent project-scoped memory
+  for agents. Every agent invocation should start with `clinear memory remind`
+  to load forced behavioral rules and recent community learnings.
+  - `memory remind` — print a formatted digest (forced rules + community context)
+  - `memory list` — list all entries with metadata
+  - `memory add --title "..." --body "..."` — add a community entry
+  - `memory update <id>` — edit an existing entry
+  - `memory remove <id>` — delete an entry
+  - `memory heal --dry-run` — remove stale community entries (older than
+    `heal_after_days`, default 30)
+  - Storage: `.clinear/memory.yaml` in the git repo root (project-scoped)
+  - Seeded with 5 forced rules: verify auth, search before create, use JSON
+    for piping, dry-run on ambiguous mutations, read memory board first
+  - Community entries auto-heal after 30 days; forced entries never expire
+- Cron-ready: `clinear memory heal` can be scheduled daily to keep the board
+  clean and relevant.
+
+### Files Changed
+- `clinear/memory_board.py` — storage layer (YAML read/write, heal logic)
+- `clinear/commands/memory.py` — 6 subcommands
+- `clinear/cli.py` — register `memory_app`
+- `clinear/skill_content/overview.md` — add memory board rules
+
+---
+
 ## [0.4.0] — 2026-05-25
 
 ### Added
