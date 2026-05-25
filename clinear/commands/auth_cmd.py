@@ -76,7 +76,7 @@ def accounts_list() -> None:
             {
                 "name": name,
                 "org_name": acc.org_name or "(unknown)",
-                "token_source": acc.token_env or "config",
+                "token_source": "config" if acc.token else f"${acc.token_env}",
                 "markers": markers,
             }
         )
@@ -99,7 +99,7 @@ def accounts_list() -> None:
         typer.echo(f"  • {row['name']}{marker_str}")
         if row["org_name"] != "(unknown)":
             typer.echo(f"    org: {row['org_name']}")
-        typer.echo(f"    token: ${row['token_source']}")
+        typer.echo(f"    token: {row['token_source']}")
     if workspace:
         typer.echo(f"\nWorkspace: {workspace}")
     else:
