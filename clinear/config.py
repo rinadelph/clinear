@@ -5,10 +5,16 @@ Lookup order:
   2. $XDG_CONFIG_HOME/clinear/config.toml
   3. ~/.config/clinear/config.toml
 
-Token resolution order:
+Token resolution order (per account):
   1. --token CLI flag (passed in)
-  2. $LINEAR_TOKEN env var
-  3. config.toml [auth].token (discouraged)
+  2. $<ACCOUNT_TOKEN_ENV> environment variable (default: LINEAR_TOKEN)
+  3. config.toml [accounts.<name>].token (discouraged)
+
+Account resolution order:
+  1. --account CLI flag
+  2. Workspace-mapped account (git repo root → config.workspaces)
+  3. Global default account (config.defaults.default_account)
+  4. First available account (fallback)
 """
 
 from __future__ import annotations
@@ -25,16 +31,22 @@ if sys.version_info >= (3, 11):
 else:  # pragma: no cover
     import tomli as tomllib
 
+try:
+    import tomli_w
+except ImportError:  # pragma: no cover
+    tomli_w = None  # type: ignore[assignment]
+
 from clinear.errors import AuthError, UsageError
 
 
-class AuthConfig(BaseModel):
-    """Authentication configuration."""
+class AccountConfig(BaseModel):
+    """A named Linear account."""
 
     model_config = ConfigDict(extra="forbid")
 
     token: str | None = None
     token_env: str = "LINEAR_TOKEN"
+    org_name: str | None = None
 
 
 class DefaultsConfig(BaseModel):
@@ -45,6 +57,7 @@ class DefaultsConfig(BaseModel):
     team: str | None = None
     output: str = "human"
     editor: str | None = None
+    default_account: str | None = None
 
 
 class DisplayConfig(BaseModel):
@@ -62,11 +75,17 @@ class Config(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    auth: AuthConfig = Field(default_factory=AuthConfig)
+    # Multi-account support (replaces single [auth] section)
+    accounts: dict[str, AccountConfig] = Field(default_factory=dict)
+    # Legacy [auth] section — present for loading old configs, migrated to accounts.default
+    auth: dict[str, Any] | None = None
+
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
     display: DisplayConfig = Field(default_factory=DisplayConfig)
     aliases: dict[str, str] = Field(default_factory=dict)
     views: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    # Per-workspace account mappings (absolute repo path → account name)
+    workspaces: dict[str, str] = Field(default_factory=dict)
 
 
 def config_path() -> Path:
@@ -76,6 +95,22 @@ def config_path() -> Path:
     xdg = os.environ.get("XDG_CONFIG_HOME")
     base = Path(xdg).expanduser() if xdg else Path.home() / ".config"
     return base / "clinear" / "config.toml"
+
+
+def _migrate_legacy_auth(data: dict[str, Any]) -> dict[str, Any]:
+    """Migrate old [auth] section to accounts.default."""
+    auth = data.pop("auth", None)
+    if auth and isinstance(auth, dict):
+        accounts = data.setdefault("accounts", {})
+        # Only migrate if accounts.default doesn't already exist
+        if "default" not in accounts:
+            accounts["default"] = {}
+        default = accounts["default"]
+        if "token" in auth and "token" not in default:
+            default["token"] = auth["token"]
+        if "token_env" in auth and "token_env" not in default:
+            default["token_env"] = auth["token_env"]
+    return data
 
 
 def load_config(path: Path | None = None) -> Config:
@@ -91,6 +126,10 @@ def load_config(path: Path | None = None) -> Config:
             f"Invalid TOML in config file: {e}",
             hint=f"Edit {p} to fix syntax",
         ) from e
+
+    # Migrate legacy [auth] section if present
+    data = _migrate_legacy_auth(data)
+
     try:
         return Config(**data)
     except Exception as e:
@@ -100,25 +139,134 @@ def load_config(path: Path | None = None) -> Config:
         ) from e
 
 
+def save_config(config: Config, path: Path | None = None) -> None:
+    """Save config to disk as TOML."""
+    if tomli_w is None:
+        raise UsageError(
+            "Cannot write config: tomli-w not installed",
+            hint="pip install tomli-w",
+        )
+    p = path or config_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    data = _config_to_dict(config)
+    with open(p, "wb") as f:
+        tomli_w.dump(data, f)
+    try:
+        os.chmod(p, 0o600)
+    except OSError:
+        pass
+
+
+def _config_to_dict(config: Config) -> dict[str, Any]:
+    """Serialize Config to a plain dict for TOML writing."""
+    data: dict[str, Any] = {}
+    if config.accounts:
+        data["accounts"] = {
+            name: acc.model_dump(exclude_none=True)
+            for name, acc in config.accounts.items()
+        }
+    defaults_dict = config.defaults.model_dump(exclude_defaults=True)
+    if defaults_dict:
+        data["defaults"] = defaults_dict
+    display_dict = config.display.model_dump(exclude_defaults=True)
+    if display_dict:
+        data["display"] = display_dict
+    if config.aliases:
+        data["aliases"] = config.aliases
+    if config.views:
+        data["views"] = config.views
+    if config.workspaces:
+        data["workspaces"] = config.workspaces
+    return data
+
+
+def _find_git_root(start: Path | None = None) -> Path | None:
+    """Walk up from start (or cwd) looking for a .git directory."""
+    start = start or Path.cwd()
+    path = start.resolve()
+    for parent in [path, *path.parents]:
+        if (parent / ".git").is_dir():
+            return parent
+    return None
+
+
+def resolve_workspace(path: Path | None = None) -> Path | None:
+    """Resolve the current workspace directory (git repo root or None)."""
+    return _find_git_root(path)
+
+
+def resolve_account(
+    cli_account: str | None,
+    config: Config,
+    workspace_path: Path | None = None,
+) -> tuple[str, AccountConfig]:
+    """Resolve which account to use.
+
+    Order:
+      1. --account CLI flag
+      2. Workspace-mapped account
+      3. Global default account
+      4. First available account (fallback)
+      5. Not found → raise AuthError
+
+    Returns (account_name, account_config).
+    """
+    # 1. CLI flag
+    if cli_account:
+        if cli_account not in config.accounts:
+            raise AuthError(
+                f"Account '{cli_account}' not found",
+                hint="Run 'clinear auth accounts' to see available accounts.",
+            )
+        return cli_account, config.accounts[cli_account]
+
+    # 2. Workspace-mapped
+    workspace = resolve_workspace(workspace_path)
+    if workspace:
+        ws_key = str(workspace)
+        mapped = config.workspaces.get(ws_key)
+        if mapped and mapped in config.accounts:
+            return mapped, config.accounts[mapped]
+
+    # 3. Global default
+    if (
+        config.defaults.default_account
+        and config.defaults.default_account in config.accounts
+    ):
+        return (
+            config.defaults.default_account,
+            config.accounts[config.defaults.default_account],
+        )
+
+    # 4. Fallback to any configured account
+    if config.accounts:
+        first_name = next(iter(config.accounts))
+        return first_name, config.accounts[first_name]
+
+    # 5. Legacy fallback: no accounts configured but $LINEAR_TOKEN may exist.
+    # Return a synthetic default account so resolve_token can check the env var.
+    return "default", AccountConfig(token_env="LINEAR_TOKEN")
+
+
 def resolve_token(
     cli_token: str | None,
-    config: Config,
+    account: AccountConfig,
 ) -> str:
     """Resolve the Linear API token using precedence rules.
 
-    Order: --token > $LINEAR_TOKEN > config.auth.token
+    Order: --token > $<ACCOUNT_TOKEN_ENV> > account.token
     """
     if cli_token:
         return cli_token
-    env_var = config.auth.token_env or "LINEAR_TOKEN"
+    env_var = account.token_env or "LINEAR_TOKEN"
     if env_token := os.environ.get(env_var):
         return env_token
-    if config.auth.token:
-        return config.auth.token
+    if account.token:
+        return account.token
     raise AuthError(
         "No Linear API token found",
         hint=(
-            f"Set ${env_var}, pass --token, or configure auth.token in "
+            f"Set ${env_var}, pass --token, or configure token in "
             f"{config_path()}"
         ),
     )

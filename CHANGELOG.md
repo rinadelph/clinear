@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.0] — 2026-05-25
+
+### Added
+
+- **Multi-account credential support** — manage multiple Linear accounts and switch
+  between them automatically per workspace or via explicit `--account` flag.
+  - New config schema: `[accounts.<name>]` sections with `token`, `token_env`,
+    and auto-populated `org_name`.
+  - Workspace-aware defaults: git repository roots can be mapped to specific
+    accounts via `config.toml [workspaces]` or automatically detected.
+  - New `clinear auth` subcommands:
+    - `auth accounts` — list all accounts with default/workspace/current markers
+    - `auth add <name> --token <token>` — add a named account (optionally
+      verifies token against Linear API to populate `org_name`)
+    - `auth switch <name>` — set global default account
+    - `auth remove <name>` — remove an account
+    - `auth workspace` — show current git repo workspace and mapped account
+  - New global flag: `--account <name>` / `-a <name>` — one-off override for
+    any subcommand.
+  - Backward compatibility: existing `[auth]` sections auto-migrate to
+    `accounts.default` on first load. Single-account behavior is preserved
+    as fallback.
+- **`clinear update`** — self-update command that checks PyPI for the latest
+  version and runs the appropriate upgrade command (`pip install --upgrade` or
+  `pipx upgrade`). Supports `--dry-run` and `--yes` flags. JSON output mode
+  supported for agent consumption.
+- New dependency: `tomli-w>=1.0` (required for writing config updates from
+  `auth add/switch/remove` commands).
+
+### Changed
+
+- `config.py` — replaced single `AuthConfig` with `AccountConfig` and
+  `AccountsConfig` dict. Added `resolve_account()` for workspace-aware
+  account selection and `save_config()` for persisting config changes.
+- `cli_state.py` — added `account_name` field to `CLIState` for tracking
+  the active account.
+- `cli.py` — added `--account` global flag and `update` command registration.
+- `init.py` — updated config template to use multi-account schema.
+
+---
+
 ## [0.3.1] — 2026-05-14
 
 ### Fixed

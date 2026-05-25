@@ -19,7 +19,7 @@ import json
 from typing import Any
 
 from clinear.client import LinearClient
-from clinear.config import load_config, resolve_token
+from clinear.config import load_config, resolve_account, resolve_token
 from clinear.errors import AuthError, ClinearError
 from clinear.graphql import queries
 from clinear.models.cycle import Cycle
@@ -41,7 +41,8 @@ def _client() -> LinearClient:
     """
     cfg = load_config()
     try:
-        token = resolve_token(None, cfg)
+        _account_name, account_cfg = resolve_account(None, cfg)
+        token = resolve_token(None, account_cfg)
     except AuthError as e:
         raise RuntimeError(
             "clinear-mcp could not resolve a Linear API token. "

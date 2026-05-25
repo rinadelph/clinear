@@ -1,6 +1,6 @@
 ---
 name: clinear
-version: 0.3.1
+version: 0.4.0
 description: Guide for using the `clinear` CLI to work through Linear issues, projects, cycles, and comments from the command line. Use when the user asks to triage, create, update, search, comment on, or move Linear issues; manage labels; inspect cycles, projects, or teams; or anything involving a Linear identifier like CLO-35 / ENG-123. Reinforces a "use Bash + clinear, do not write Python wrappers" workflow.
 author: rinadelph
 requires:

@@ -14,12 +14,17 @@ CONFIG_TEMPLATE = """\
 # clinear configuration file
 # Location: __CONFIG_PATH__
 #
-# Token resolution order:
+# Token resolution order (per account):
 #   1. --token CLI flag
-#   2. $LINEAR_TOKEN environment variable (recommended)
-#   3. [auth].token below (discouraged: plaintext in dotfiles)
+#   2. $<ACCOUNT_TOKEN_ENV> environment variable (default: LINEAR_TOKEN)
+#   3. [accounts.<name>].token below (discouraged: plaintext in dotfiles)
+#
+# Account resolution order:
+#   1. --account CLI flag
+#   2. Workspace-mapped account (git repo → account)
+#   3. Global default account
 
-[auth]
+[accounts.default]
 # Environment variable to read the token from. Default: LINEAR_TOKEN.
 token_env = "LINEAR_TOKEN"
 # Uncomment to store the token here directly (not recommended):
@@ -30,11 +35,19 @@ token_env = "LINEAR_TOKEN"
 # team = "ENG"
 output = "human"
 # editor = "$EDITOR"
+# Global default account when not in a mapped workspace
+default_account = "default"
 
 [display]
 color = true
 table_max_width = 120
 truncate_descriptions = 80
+
+# Per-workspace account mappings (absolute repo path → account name).
+# Detected automatically when you run `clinear auth workspace`.
+# [workspaces]
+# "/home/user/work/acme" = "work"
+# "/home/user/oss/project" = "personal"
 
 # Named filter aliases. Use with: clinear issue list --view <name>
 # (Not yet wired up in v0.2 — reserved.)
@@ -76,6 +89,11 @@ def init(
     typer.echo("Next steps:")
     typer.echo(f"  1. export LINEAR_TOKEN=\"lin_api_...\"  # or edit {target}")
     typer.echo("  2. clinear me  # verify it works")
+    typer.echo("")
+    typer.echo("Multi-account setup:")
+    typer.echo("  clinear auth add work --token $LINEAR_WORK_TOKEN")
+    typer.echo("  clinear auth add personal --token $LINEAR_PERSONAL_TOKEN")
+    typer.echo("  clinear auth switch work")
 
 
 def _to_path(p: str):

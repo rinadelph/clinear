@@ -26,6 +26,7 @@ class CLIState:
     no_color: bool = False
     dry_run: bool = False
     timeout: float = 30.0
+    account_name: str = ""  # active account name for context display
 
 
 _state = CLIState()

@@ -17,6 +17,38 @@ Print which token source resolved (env var, config file, --token flag).
 clinear auth status
 ```
 
+### `clinear auth accounts`
+List all configured accounts with default/workspace/current markers and org names.
+```bash
+clinear auth accounts               # human-readable list
+clinear -o json auth accounts      # structured for agent reasoning
+```
+
+### `clinear auth add`
+Add a named account. Optionally verifies the token against the Linear API to populate `org_name`.
+```bash
+clinear auth add work --token $LINEAR_WORK_TOKEN
+clinear auth add personal --token $LINEAR_PERSONAL_TOKEN --token-env LINEAR_PERSONAL_TOKEN
+```
+
+### `clinear auth switch`
+Set the global default account.
+```bash
+clinear auth switch work
+```
+
+### `clinear auth remove`
+Remove a named account.
+```bash
+clinear auth remove work
+```
+
+### `clinear auth workspace`
+Show the current git repo workspace and which account is mapped to it.
+```bash
+clinear auth workspace
+```
+
 ### `clinear init`
 Generate a starter config at `~/.config/clinear/config.toml`.
 ```bash
@@ -148,10 +180,23 @@ clinear -o json raw query 'query { ... }'
 
 **Behavior:** prefer the dedicated commands. `raw query` is for advanced or one-off needs only — it does not validate against Pydantic models and may surface inconsistent error shapes.
 
+## Self-update
+
+### `clinear update`
+Check PyPI for a newer version and upgrade clinear (supports pip and pipx installations).
+
+```bash
+clinear update                     # check + interactive confirm
+clinear update --dry-run           # show what would happen
+clinear update --yes               # skip confirmation
+clinear -o json update --dry-run  # structured output for agents
+```
+
 ## Global flags (apply before any subcommand)
 
 ```bash
 clinear --token <T> ...              # override env var
+clinear --account <NAME> ...          # use a specific account (one-off override)
 clinear -o json ...                   # output format
 clinear -v ...                        # verbose to stderr
 clinear --dry-run ...                 # preview mutations

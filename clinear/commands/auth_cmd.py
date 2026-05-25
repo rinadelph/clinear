@@ -3,11 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+import json as _json
+from typing import Any
 
 import typer
 
-from clinear.auth import get_viewer
+from clinear.auth import get_viewer, reset_viewer_cache
 from clinear.cli_state import build_client, get_state
+from clinear.client import LinearClient
+from clinear.config import (
+    AccountConfig,
+    config_path,
+    load_config,
+    resolve_workspace,
+    save_config,
+)
+from clinear.errors import AuthError, UsageError
 from clinear.models.enums import OutputFormat
 from clinear.output import render
 
@@ -40,3 +51,181 @@ async def _run_me() -> None:
     async with build_client(state) as client:
         viewer = await get_viewer(client)
         render(viewer, fmt=state.output, title="Viewer")
+
+
+@auth_app.command("accounts")
+def accounts_list() -> None:
+    """List all configured accounts with default/workspace/current markers."""
+    state = get_state()
+    config = state.config
+    workspace = resolve_workspace()
+    workspace_account = (
+        config.workspaces.get(str(workspace)) if workspace else None
+    )
+
+    account_rows: list[dict[str, Any]] = []
+    for name, acc in config.accounts.items():
+        markers: list[str] = []
+        if name == config.defaults.default_account:
+            markers.append("default")
+        if name == workspace_account:
+            markers.append("workspace")
+        if name == state.account_name:
+            markers.append("current")
+        account_rows.append(
+            {
+                "name": name,
+                "org_name": acc.org_name or "(unknown)",
+                "token_source": acc.token_env or "config",
+                "markers": markers,
+            }
+        )
+
+    if state.output == OutputFormat.JSON:
+        print(_json.dumps(account_rows, indent=2))
+        return
+
+    # Human output
+    if not account_rows:
+        typer.echo("No accounts configured.")
+        typer.echo("Run: clinear auth add <name> --token <token>")
+        return
+
+    typer.echo("Configured accounts:")
+    for row in account_rows:
+        marker_str = ""
+        if row["markers"]:
+            marker_str = " [" + ", ".join(row["markers"]) + "]"
+        typer.echo(f"  • {row['name']}{marker_str}")
+        if row["org_name"] != "(unknown)":
+            typer.echo(f"    org: {row['org_name']}")
+        typer.echo(f"    token: ${row['token_source']}")
+    if workspace:
+        typer.echo(f"\nWorkspace: {workspace}")
+    else:
+        typer.echo("\nWorkspace: (none — not in a git repo)")
+
+
+@auth_app.command("add")
+def account_add(
+    name: str = typer.Argument(..., help="Account name"),
+    token: str = typer.Option(..., "--token", help="Linear API token"),
+    token_env: str = typer.Option(
+        "LINEAR_TOKEN", "--token-env", help="Environment variable name"
+    ),
+    verify: bool = typer.Option(
+        True, "--verify/--no-verify", help="Verify token by calling Linear API"
+    ),
+    default: bool = typer.Option(
+        False, "--default", help="Set as global default account"
+    ),
+) -> None:
+    """Add a new named account."""
+    config = load_config()
+    if name in config.accounts:
+        raise UsageError(
+            f"Account '{name}' already exists",
+            hint="Use 'clinear auth remove {name}' first, or pick a different name.",
+        )
+
+    org_name: str | None = None
+    if verify:
+        try:
+            org_name = asyncio.run(_fetch_org_name(token))
+        except Exception as e:
+            typer.echo(f"Warning: could not verify token ({e})", err=True)
+
+    was_empty = len(config.accounts) == 0
+    config.accounts[name] = AccountConfig(
+        token=token if token_env == "LINEAR_TOKEN" else None,
+        token_env=token_env,
+        org_name=org_name,
+    )
+    if default or was_empty:
+        config.defaults.default_account = name
+    save_config(config)
+    typer.echo(f"Added account '{name}'" + (f" ({org_name})" if org_name else ""))
+
+
+async def _fetch_org_name(token: str) -> str | None:
+    """Make a quick API call to get the organization name."""
+    from clinear.graphql import queries
+    from clinear.models.user import User
+
+    client = LinearClient(token=token, timeout=10.0)
+    async with client:
+        viewer = await client.execute_as(User, queries.VIEWER, path=["viewer"], operation="Viewer")
+        # viewer.organization may not exist on the User model; handle gracefully
+        return getattr(viewer, "organization_name", None) or getattr(
+            viewer, "organization", None
+        )
+
+
+@auth_app.command("switch")
+def account_switch(
+    name: str = typer.Argument(..., help="Account name to set as default"),
+) -> None:
+    """Set the global default account."""
+    config = load_config()
+    if name not in config.accounts:
+        raise AuthError(
+            f"Account '{name}' not found",
+            hint="Run 'clinear auth accounts' to see available accounts.",
+        )
+    config.defaults.default_account = name
+    save_config(config)
+    typer.echo(f"Default account set to '{name}'")
+
+
+@auth_app.command("remove")
+def account_remove(
+    name: str = typer.Argument(..., help="Account name to remove"),
+) -> None:
+    """Remove a named account."""
+    config = load_config()
+    if name not in config.accounts:
+        raise AuthError(
+            f"Account '{name}' not found",
+            hint="Run 'clinear auth accounts' to see available accounts.",
+        )
+    del config.accounts[name]
+    # Clean up workspace mappings pointing to this account
+    config.workspaces = {
+        k: v for k, v in config.workspaces.items() if v != name
+    }
+    if config.defaults.default_account == name:
+        config.defaults.default_account = next(iter(config.accounts), None)
+    save_config(config)
+    typer.echo(f"Removed account '{name}'")
+
+
+@auth_app.command("workspace")
+def auth_workspace() -> None:
+    """Show current workspace detection and mapped account."""
+    state = get_state()
+    config = state.config
+    workspace = resolve_workspace()
+
+    result: dict[str, Any] = {
+        "workspace": str(workspace) if workspace else None,
+        "mapped_account": None,
+        "default_account": config.defaults.default_account,
+    }
+    if workspace:
+        mapped = config.workspaces.get(str(workspace))
+        result["mapped_account"] = mapped
+
+    if state.output == OutputFormat.JSON:
+        print(_json.dumps(result, indent=2))
+        return
+
+    if workspace:
+        typer.echo(f"Workspace: {workspace}")
+        if mapped := result["mapped_account"]:
+            typer.echo(f"Mapped account: {mapped}")
+        else:
+            typer.echo("No workspace mapping configured.")
+            typer.echo(f"Default account: {config.defaults.default_account or '(none)'}")
+    else:
+        typer.echo("Not inside a git repository.")
+        typer.echo(f"Default account: {config.defaults.default_account or '(none)'}")

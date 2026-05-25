@@ -22,7 +22,8 @@ from clinear.commands.label import label_app
 from clinear.commands.project import project_app
 from clinear.commands.raw import raw_app
 from clinear.commands.team import team_app
-from clinear.config import load_config, resolve_token
+from clinear.commands.update import update_app
+from clinear.config import load_config, resolve_account, resolve_token
 from clinear.errors import ClinearError
 from clinear.models.enums import OutputFormat
 from clinear.output import emit_error
@@ -46,6 +47,7 @@ def _version_cb(value: bool) -> None:
 def main(
     ctx: typer.Context,
     token: Optional[str] = typer.Option(None, "--token", envvar=None, help="Linear API token (overrides $LINEAR_TOKEN)"),
+    account: Optional[str] = typer.Option(None, "--account", "-a", envvar=None, help="Account name to use (overrides workspace/default)"),
     output: OutputFormat = typer.Option(OutputFormat.HUMAN, "--output", "-o", help="Output format"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Print GraphQL operations to stderr"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-essential output"),
@@ -57,14 +59,16 @@ def main(
     ),
 ) -> None:
     """Global flags applied before any subcommand."""
-    # Resolve config + token
+    # Resolve config + account + token
     config = load_config()
 
-    # Token resolution: only required for commands that hit the API.
+    # Account resolution: only required for commands that hit the API.
     # We defer the actual AuthError to first API call to allow `--help` etc.
     try:
-        resolved_token = resolve_token(token, config)
+        account_name, account_cfg = resolve_account(account, config)
+        resolved_token = resolve_token(token, account_cfg)
     except ClinearError:
+        account_name = ""
         resolved_token = ""
 
     state = CLIState(
@@ -76,6 +80,7 @@ def main(
         no_color=no_color,
         dry_run=dry_run,
         timeout=timeout,
+        account_name=account_name,
     )
     set_state(state)
 
@@ -91,6 +96,7 @@ app.add_typer(cycle_app, name="cycle")
 app.add_typer(comment_app, name="comment")
 app.add_typer(label_app, name="label")
 app.add_typer(raw_app, name="raw")
+app.add_typer(update_app, name="update")
 
 
 def _entry() -> None:

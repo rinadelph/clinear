@@ -24,22 +24,28 @@ Use `clinear` via the **Bash tool** whenever a task touches Linear:
 ## Behavioral rules (read these before invoking)
 
 1. **Verify auth first in a fresh shell:** `clinear me`. If it fails, stop and surface the auth error to the user before any mutation.
-2. **Search before create.** `clinear issue search "<query>"` prevents duplicate issues. Always run this when the user says "create an issue about X" unless they already gave you an explicit identifier.
-3. **Use `--output json` when piping or programmatically reading.** `--output human` is for terminal display only.
-4. **Linear identifiers are case-sensitive.** Use `CLO-35`, never `clo-35`.
-5. **Use `--dry-run` on mutations** when the user's intent is ambiguous or destructive.
-6. **Prefer dedicated subcommands over `raw query`.** `raw query` is an escape hatch for unsupported GraphQL operations only.
-7. **Chain via the shell, not Python.** For multi-step workflows (create + assign + comment), call `clinear` three times — do not write Python wrappers around the Linear API.
-8. **Filter at the API, not in shell.** `clinear issue list --assignee me --state "In Progress"` is faster and cleaner than `clinear issue list | jq`.
-9. **Never log or echo the token.** The CLI masks it automatically; do not print `$LINEAR_TOKEN` in your shell output.
-10. **`clinear issue delete` does NOT exist.** Linear has no hard delete via API. Use a state transition (e.g., `cancel` or `archive` workflow state) instead.
+2. **Discover accounts before assuming defaults.** When working across multiple Linear organizations, run `clinear -o json auth accounts` to see available accounts and their org names. Use `--account <name>` for one-off switches or `clinear auth workspace` to verify auto-detection.
+3. **Search before create.** `clinear issue search "<query>"` prevents duplicate issues. Always run this when the user says "create an issue about X" unless they already gave you an explicit identifier.
+4. **Use `--output json` when piping or programmatically reading.** `--output human` is for terminal display only.
+5. **Linear identifiers are case-sensitive.** Use `CLO-35`, never `clo-35`.
+6. **Use `--dry-run` on mutations** when the user's intent is ambiguous or destructive.
+7. **Prefer dedicated subcommands over `raw query`.** `raw query` is an escape hatch for unsupported GraphQL operations only.
+8. **Chain via the shell, not Python.** For multi-step workflows (create + assign + comment), call `clinear` three times — do not write Python wrappers around the Linear API.
+9. **Filter at the API, not in shell.** `clinear issue list --assignee me --state "In Progress"` is faster and cleaner than `clinear issue list | jq`.
+10. **Never log or echo the token.** The CLI masks it automatically; do not print `$LINEAR_TOKEN` in your shell output.
+11. **`clinear issue delete` does NOT exist.** Linear has no hard delete via API. Use a state transition (e.g., `cancel` or `archive` workflow state) instead.
 
 ## Command tree (one-liner reference)
 
 ```
 clinear me                          # current user
 clinear auth status                 # who am I authed as?
+clinear auth accounts               # list all accounts
+clinear auth add <NAME> --token <T>  # add an account
+clinear auth switch <NAME>           # set default
+clinear auth workspace              # show current workspace + mapped account
 clinear init                        # write config file
+clinear update                      # self-update from PyPI
 
 clinear team list
 clinear team get <KEY>              # e.g. CLO
@@ -77,6 +83,7 @@ clinear raw query "<GraphQL string>"          # escape hatch
 ## Global flags
 
 - `--token <TOKEN>` — override env var. Use only when needed.
+- `--account <NAME>` — one-off account override. Run `auth accounts` first to discover names.
 - `--output, -o {human,json,yaml,md,plain,ids}` — output format.
 - `--verbose, -v` — log GraphQL operations to stderr (token redacted).
 - `--quiet, -q` — suppress non-essential output.
