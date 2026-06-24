@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json as _json
-from typing import Any
+from typing import Any, Optional
 
 import typer
 
@@ -77,6 +77,7 @@ def accounts_list() -> None:
                 "name": name,
                 "org_name": acc.org_name or "(unknown)",
                 "token_source": "config" if acc.token else f"${acc.token_env}",
+                "teams": acc.teams,
                 "markers": markers,
             }
         )
@@ -100,6 +101,8 @@ def accounts_list() -> None:
         if row["org_name"] != "(unknown)":
             typer.echo(f"    org: {row['org_name']}")
         typer.echo(f"    token: {row['token_source']}")
+        if row["teams"]:
+            typer.echo(f"    teams: {', '.join(row['teams'])}")
     if workspace:
         typer.echo(f"\nWorkspace: {workspace}")
     else:
@@ -119,6 +122,13 @@ def account_add(
     default: bool = typer.Option(
         False, "--default", help="Set as global default account"
     ),
+    teams: Optional[str] = typer.Option(
+        None,
+        "--teams",
+        help="Comma-separated team keys this account owns (e.g. 'SWA,ENG'). "
+        "Enables automatic account selection when a command targets one of "
+        "these teams.",
+    ),
 ) -> None:
     """Add a new named account."""
     config = load_config()
@@ -135,11 +145,15 @@ def account_add(
         except Exception as e:
             typer.echo(f"Warning: could not verify token ({e})", err=True)
 
+    team_keys = (
+        [t.strip().upper() for t in teams.split(",") if t.strip()] if teams else []
+    )
     was_empty = len(config.accounts) == 0
     config.accounts[name] = AccountConfig(
         token=token if token_env == "LINEAR_TOKEN" else None,
         token_env=token_env,
         org_name=org_name,
+        teams=team_keys,
     )
     if default or was_empty:
         config.defaults.default_account = name
@@ -175,6 +189,31 @@ def account_switch(
     config.defaults.default_account = name
     save_config(config)
     typer.echo(f"Default account set to '{name}'")
+
+
+@auth_app.command("teams")
+def account_teams(
+    name: str = typer.Argument(..., help="Account name to edit"),
+    teams: str = typer.Argument(
+        ...,
+        help="Comma-separated team keys this account owns (e.g. 'SWA,ENG'). "
+        "Pass an empty string to clear.",
+    ),
+) -> None:
+    """Set the team keys an account owns (for automatic account selection)."""
+    config = load_config()
+    if name not in config.accounts:
+        raise AuthError(
+            f"Account '{name}' not found",
+            hint="Run 'clinear auth accounts' to see available accounts.",
+        )
+    team_keys = [t.strip().upper() for t in teams.split(",") if t.strip()]
+    config.accounts[name].teams = team_keys
+    save_config(config)
+    if team_keys:
+        typer.echo(f"Account '{name}' now owns teams: {', '.join(team_keys)}")
+    else:
+        typer.echo(f"Cleared team ownership for account '{name}'")
 
 
 @auth_app.command("remove")

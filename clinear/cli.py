@@ -44,6 +44,29 @@ def _version_cb(value: bool) -> None:
         raise typer.Exit()
 
 
+def _team_key_hint_from_argv(argv: list[str]) -> str | None:
+    """Best-effort scan of argv for a team key, used for account selection.
+
+    The root callback runs before subcommands parse their own options, so we
+    sniff argv for either a ``--team/-t <value>`` option or a bare issue
+    identifier like ``SWA-20``. This is purely a hint — it only influences
+    which account (token) is chosen, never what the subcommand does.
+    """
+    for i, arg in enumerate(argv):
+        if arg in ("--team", "-t") and i + 1 < len(argv):
+            return argv[i + 1]
+        if arg.startswith("--team="):
+            return arg.split("=", 1)[1]
+    # Fall back to the first issue-identifier-looking positional (KEY-123).
+    for arg in argv:
+        if arg.startswith("-"):
+            continue
+        head, sep, tail = arg.partition("-")
+        if sep and head.isalpha() and tail.isdigit():
+            return arg
+    return None
+
+
 @app.callback()
 def main(
     ctx: typer.Context,
@@ -66,7 +89,10 @@ def main(
     # Account resolution: only required for commands that hit the API.
     # We defer the actual AuthError to first API call to allow `--help` etc.
     try:
-        account_name, account_cfg = resolve_account(account, config)
+        team_hint = _team_key_hint_from_argv(sys.argv[1:])
+        account_name, account_cfg = resolve_account(
+            account, config, team_key=team_hint
+        )
         resolved_token = resolve_token(token, account_cfg)
     except ClinearError:
         account_name = ""

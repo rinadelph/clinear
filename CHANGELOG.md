@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.0] — 2026-06-24
+### Added
+- **Intelligent account auto-selection by team key.** Accounts can now declare
+  the team keys they own via `teams = ["SWA", "ENG"]` (config), the new
+  `clinear auth add --teams "SWA,ENG"` flag, or `clinear auth teams <name> "SWA,ENG"`.
+  When a command targets a team — through `--team SWA` or an identifier like
+  `SWA-20` — clinear picks the owning account (and its token) automatically,
+  with no `--account` flag or env-var juggling. Resolution order is now:
+  `--account` › team-key ownership › workspace mapping › default › first.
+- `clinear auth teams <name> "<keys>"` command to set/clear an account's team keys.
+- `teams` shown in `clinear auth accounts` output (human + JSON).
+
+### Fixed
+- **WorkflowState enum no longer crashes on undocumented state types.** Teams
+  with a workflow state whose `type` is outside the six documented categories
+  (e.g. `"duplicate"`) previously broke `clinear team states` and
+  `clinear issue state` with a Pydantic validation error. The `type` field is
+  now a smart union (`WorkflowStateType | str`): known types become the enum,
+  unknown types pass through as plain strings.
+
+### Changed
+- Agent skill (`SKILL.md` + `skill_content/`) rewritten to match reality:
+  corrected the multi-account/auth section (removed the dangerous "rewrite to
+  `[auth]`" advice), fixed `comment add`/`comment edit` to positional body
+  (no `--body` flag), documented `--account` and the new team auto-selection.
+
+### Tests
+- New offline unit suite `tests/test_account_resolution.py` (20 tests) covering
+  `team_key_from_hint`, `resolve_account` precedence, `resolve_token`, and the
+  WorkflowState smart-union.
+
+---
+
 ## [0.4.1] — 2026-05-25
 
 ### Added

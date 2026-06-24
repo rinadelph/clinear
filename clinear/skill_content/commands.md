@@ -25,9 +25,9 @@ clinear -o json auth accounts      # structured for agent reasoning
 ```
 
 ### `clinear auth add`
-Add a named account. Optionally verifies the token against the Linear API to populate `org_name`.
+Add a named account. Optionally verifies the token against the Linear API to populate `org_name`. Use `--teams` to declare which team keys the account owns (enables automatic account selection) and `--default` to make it the global default.
 ```bash
-clinear auth add work --token $LINEAR_WORK_TOKEN
+clinear auth add work --token $LINEAR_WORK_TOKEN --teams "ENG,OPS" --default
 clinear auth add personal --token $LINEAR_PERSONAL_TOKEN --token-env LINEAR_PERSONAL_TOKEN
 ```
 
@@ -35,6 +35,15 @@ clinear auth add personal --token $LINEAR_PERSONAL_TOKEN --token-env LINEAR_PERS
 Set the global default account.
 ```bash
 clinear auth switch work
+```
+
+### `clinear auth teams`
+Set which team keys an account owns. When a command targets one of these teams
+(via `--team SWA` or an identifier like `SWA-20`), that account — and its token —
+is selected automatically, with no `--account` flag needed.
+```bash
+clinear auth teams work "ENG,OPS"     # set
+clinear auth teams work ""            # clear
 ```
 
 ### `clinear auth remove`
@@ -145,15 +154,15 @@ clinear cycle list CLO               # all cycles
 clinear comment list CLO-35                  # all comments on an issue
 clinear comment list CLO-35 -n 10            # limit
 
-clinear comment add CLO-35 --body "Looks good"
+clinear comment add CLO-35 "Looks good"
 
 # Or pipe from stdin
-echo "Build broke at step 4" | clinear comment add CLO-35 --body -
+echo "Build broke at step 4" | clinear comment add CLO-35
 
 # Or from a command's output
-git log -1 --pretty=%B | clinear comment add CLO-35 --body -
+git log -1 --pretty=%B | clinear comment add CLO-35
 
-clinear comment edit <COMMENT_ID> --body "Updated"
+clinear comment edit <COMMENT_ID> "Updated"
 clinear comment delete <COMMENT_ID>
 ```
 

@@ -82,7 +82,7 @@ Three commands, in order, with one comment trail:
 ```bash
 clinear issue assign CLO-35 "Bob"
 clinear issue state CLO-35 "In Review"
-clinear comment add CLO-35 --body "Handing off to @bob — context: see PR #1234"
+clinear comment add CLO-35 "Handing off to @bob — context: see PR #1234"
 ```
 
 **Behavioral rule:** always add a comment when handing off. A bare reassignment without context creates ambiguity downstream.
@@ -149,7 +149,7 @@ In a CI script, post failure details to the related Linear issue:
 ```bash
 ISSUE_ID=$(git log -1 --pretty=%B | grep -oE 'CLO-[0-9]+' | head -1)
 if [ -n "$ISSUE_ID" ]; then
-    pytest 2>&1 | tail -50 | clinear comment add "$ISSUE_ID" --body -
+    pytest 2>&1 | tail -50 | clinear comment add "$ISSUE_ID"
 fi
 ```
 

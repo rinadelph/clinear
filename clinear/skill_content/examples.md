@@ -43,7 +43,7 @@ clinear -o md issue list --assignee me --state "In Progress" --state "In Review"
 ```bash
 clinear issue assign CLO-35 "Alice"
 clinear issue state CLO-35 "In Review"
-clinear comment add CLO-35 --body "Handing off — see PR #1234 for context"
+clinear comment add CLO-35 "Handing off — see PR #1234 for context"
 ```
 
 ## "Move ten issues from label `bug-old` to `bug`"
@@ -64,14 +64,14 @@ clinear -o md issue list \
 ## "Comment with the latest commit message"
 
 ```bash
-git log -1 --pretty=%B | clinear comment add CLO-35 --body -
+git log -1 --pretty=%B | clinear comment add CLO-35
 ```
 
 ## "Comment with test output on failure"
 
 ```bash
 if ! pytest; then
-    pytest 2>&1 | tail -100 | clinear comment add CLO-35 --body -
+    pytest 2>&1 | tail -100 | clinear comment add CLO-35
 fi
 ```
 
