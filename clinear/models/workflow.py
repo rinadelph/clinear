@@ -8,13 +8,18 @@ from __future__ import annotations
 
 from enum import Enum
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from clinear.models.base import Timestamped
 
 
 class WorkflowStateType(str, Enum):
-    """Linear's six built-in workflow state categories."""
+    """Linear's documented workflow state categories.
+
+    Linear can return additional, undocumented state types (e.g. ``"duplicate"``)
+    for teams that enable extra workflow behaviors. Those values must NOT crash
+    the CLI — see ``WorkflowState.type`` for how unknown types are preserved.
+    """
 
     TRIAGE = "triage"
     BACKLOG = "backlog"
@@ -22,6 +27,22 @@ class WorkflowStateType(str, Enum):
     STARTED = "started"
     COMPLETED = "completed"
     CANCELED = "canceled"
+
+    @classmethod
+    def coerce(cls, value: object) -> "WorkflowStateType | str":
+        """Return the enum member for known types, else the raw string.
+
+        Both branches are ``str`` subclasses, so downstream formatting,
+        equality checks and JSON/YAML serialization behave identically.
+        """
+        if isinstance(value, cls):
+            return value
+        if isinstance(value, str):
+            try:
+                return cls(value)
+            except ValueError:
+                return value
+        return str(value)
 
 
 class WorkflowState(Timestamped):
@@ -32,5 +53,13 @@ class WorkflowState(Timestamped):
     color: str | None = None
     description: str | None = None
     position: float | None = None
-    type: WorkflowStateType
+    # Smart union: Linear may emit state types outside the documented enum
+    # (e.g. "duplicate"). Keep those as a plain string instead of raising a
+    # pydantic ValidationError that would break `team states` / `issue state`.
+    type: WorkflowStateType | str
     team_id: str | None = Field(alias="teamId", default=None)
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def _coerce_type(cls, v: object) -> "WorkflowStateType | str":
+        return WorkflowStateType.coerce(v)

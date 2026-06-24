@@ -75,8 +75,8 @@ clinear cycle current <TEAM_KEY>
 clinear cycle list <TEAM_KEY>
 
 clinear comment list <ISSUE_ID> [-n N]
-clinear comment add <ISSUE_ID> --body "..."          # or pipe via --body -
-clinear comment edit <COMMENT_ID> --body "..."
+clinear comment add <ISSUE_ID> "..."                 # body positional; omit to read stdin
+clinear comment edit <COMMENT_ID> "..."
 clinear comment delete <COMMENT_ID>
 
 clinear label list [--team <KEY>]

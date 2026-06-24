@@ -29,6 +29,9 @@ CONFIG_TEMPLATE = """\
 token_env = "LINEAR_TOKEN"
 # Uncomment to store the token here directly (not recommended):
 # token = "lin_api_..."
+# Team keys this account owns — enables automatic account selection when a
+# command targets one of these teams (e.g. `clinear issue get SWA-20`).
+# teams = ["SWA", "ENG"]
 
 [defaults]
 # Default team key — used when commands accept --team but you omit it.

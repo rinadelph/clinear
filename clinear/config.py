@@ -47,6 +47,10 @@ class AccountConfig(BaseModel):
     token: str | None = None
     token_env: str = "LINEAR_TOKEN"
     org_name: str | None = None
+    # Team keys this account owns (e.g. ["SWA", "ENG"]). Used for intelligent
+    # account auto-selection: a command targeting team SWA (via --team SWA or
+    # an identifier like SWA-20) picks the account that lists "SWA" here.
+    teams: list[str] = Field(default_factory=list)
 
 
 class DefaultsConfig(BaseModel):
@@ -162,7 +166,7 @@ def _config_to_dict(config: Config) -> dict[str, Any]:
     data: dict[str, Any] = {}
     if config.accounts:
         data["accounts"] = {
-            name: acc.model_dump(exclude_none=True)
+            name: acc.model_dump(exclude_none=True, exclude_defaults=True)
             for name, acc in config.accounts.items()
         }
     defaults_dict = config.defaults.model_dump(exclude_defaults=True)
@@ -195,19 +199,40 @@ def resolve_workspace(path: Path | None = None) -> Path | None:
     return _find_git_root(path)
 
 
+def team_key_from_hint(hint: str | None) -> str | None:
+    """Extract an uppercase team key from a --team value or an issue identifier.
+
+    Accepts a bare key ("SWA") or an identifier ("SWA-20") and returns "SWA".
+    Returns None for UUIDs, empty values, or anything without a key prefix.
+    """
+    if not hint:
+        return None
+    h = hint.strip()
+    # UUIDs (36 chars, 4 dashes) are not team keys.
+    if len(h) == 36 and h.count("-") == 4:
+        return None
+    # Identifier form KEY-123 → KEY
+    prefix = h.split("-", 1)[0]
+    if prefix.isalpha():
+        return prefix.upper()
+    return None
+
+
 def resolve_account(
     cli_account: str | None,
     config: Config,
     workspace_path: Path | None = None,
+    team_key: str | None = None,
 ) -> tuple[str, AccountConfig]:
     """Resolve which account to use.
 
     Order:
       1. --account CLI flag
-      2. Workspace-mapped account
-      3. Global default account
-      4. First available account (fallback)
-      5. Not found → raise AuthError
+      2. Team-key-owning account (account.teams contains team_key)
+      3. Workspace-mapped account
+      4. Global default account
+      5. First available account (fallback)
+      6. Not found → synthetic default (lets resolve_token check $LINEAR_TOKEN)
 
     Returns (account_name, account_config).
     """
@@ -220,7 +245,14 @@ def resolve_account(
             )
         return cli_account, config.accounts[cli_account]
 
-    # 2. Workspace-mapped
+    # 2. Team-key ownership — pick the account that declares this team key.
+    key = team_key_from_hint(team_key)
+    if key:
+        for name, acc in config.accounts.items():
+            if any(t.strip().upper() == key for t in acc.teams):
+                return name, acc
+
+    # 3. Workspace-mapped
     workspace = resolve_workspace(workspace_path)
     if workspace:
         ws_key = str(workspace)
@@ -228,7 +260,7 @@ def resolve_account(
         if mapped and mapped in config.accounts:
             return mapped, config.accounts[mapped]
 
-    # 3. Global default
+    # 4. Global default
     if (
         config.defaults.default_account
         and config.defaults.default_account in config.accounts
@@ -238,12 +270,12 @@ def resolve_account(
             config.accounts[config.defaults.default_account],
         )
 
-    # 4. Fallback to any configured account
+    # 5. Fallback to any configured account
     if config.accounts:
         first_name = next(iter(config.accounts))
         return first_name, config.accounts[first_name]
 
-    # 5. Legacy fallback: no accounts configured but $LINEAR_TOKEN may exist.
+    # 6. Legacy fallback: no accounts configured but $LINEAR_TOKEN may exist.
     # Return a synthetic default account so resolve_token can check the env var.
     return "default", AccountConfig(token_env="LINEAR_TOKEN")
 

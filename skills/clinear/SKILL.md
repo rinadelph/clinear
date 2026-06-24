@@ -1,6 +1,6 @@
 ---
 name: clinear
-version: 0.4.0
+version: 0.5.0
 description: Guide for using the `clinear` CLI to work through Linear issues, projects, cycles, and comments from the command line. Use when the user asks to triage, create, update, search, comment on, or move Linear issues; manage labels; inspect cycles, projects, or teams; or anything involving a Linear identifier like CLO-35 / ENG-123. Reinforces a "use Bash + clinear, do not write Python wrappers" workflow.
 author: rinadelph
 requires:
@@ -104,7 +104,7 @@ clinear issue create --team CLO --title "<title>" \
 ```bash
 clinear issue assign CLO-35 "Bob"
 clinear issue state CLO-35 "In Review"
-clinear comment add CLO-35 --body "Handing off — see PR #1234"
+clinear comment add CLO-35 "Handing off — see PR #1234"
 ```
 
 #### Cycle review
@@ -120,13 +120,31 @@ clinear -o ids issue list --label "old" -n 100 \
     | xargs -I{} clinear issue update {} --label "new"
 ```
 
+#### Multi-account: let clinear pick the right workspace
+```bash
+# One-time: declare which teams each account owns
+clinear auth add acme --token lin_api_xxx --teams "ENG,OPS"
+clinear auth add side --token lin_api_yyy --teams "SIDE"
+
+# Now just use team keys / identifiers — the owning account is auto-selected:
+clinear issue list --team ENG     # → acme account
+clinear issue get SIDE-12         # → side account
+clinear --account acme me         # explicit override when needed
+```
+
 → Full workflow library: `references/workflows.md`
 
 ## Available Commands
 
 ### Identity / Auth
 - `clinear me` — show the current user
-- `clinear auth status` — check which token source resolved
+- `clinear auth status` — show the authenticated user + resolved token source
+- `clinear auth accounts` — list configured accounts (default/workspace/current/teams markers)
+- `clinear auth add <name> --token <T> [--teams "SWA,ENG"] [--default]` — add a named account
+- `clinear auth switch <name>` — set the global default account
+- `clinear auth teams <name> "SWA,ENG"` — set which team keys an account owns (for auto-selection)
+- `clinear auth remove <name>` — delete a named account
+- `clinear auth workspace` — show current git-repo → account mapping
 - `clinear init` — scaffold `~/.config/clinear/config.toml`
 
 ### Teams
@@ -156,8 +174,8 @@ clinear -o ids issue list --label "old" -n 100 \
 
 ### Comments
 - `clinear comment list <ISSUE_ID> [-n N]`
-- `clinear comment add <ISSUE_ID> --body "..."` (or `--body -` for stdin)
-- `clinear comment edit <COMMENT_ID> --body "..."`
+- `clinear comment add <ISSUE_ID> "<body>"` (body is POSITIONAL; omit to read stdin)
+- `clinear comment edit <COMMENT_ID> "<body>"` (positional; omit to read stdin)
 - `clinear comment delete <COMMENT_ID>`
 
 ### Labels
@@ -175,6 +193,7 @@ clinear -o ids issue list --label "old" -n 100 \
 All commands support:
 
 - `--token <T>` — override env var (don't pass real tokens in scripts)
+- `--account <name>` / `-a <name>` — force a specific configured account
 - `-o`/`--output {human,json,yaml,md,plain,ids}` — output format
 - `-v`/`--verbose` — print GraphQL operations to stderr (token redacted)
 - `-q`/`--quiet` — suppress non-essential output
@@ -196,16 +215,62 @@ All commands support:
 
 → Format deep dive: `references/output-formats.md`
 
-## Authentication
+## Authentication & Multi-Account
 
-clinear resolves the Linear API token in this order:
+clinear supports **multiple Linear accounts/workspaces** with no env-var
+juggling — accounts live in `~/.config/clinear/config.toml` and the right one
+is selected automatically. You do NOT need to export a token per workspace.
+
+### Set up accounts (one time)
+
+```bash
+clinear auth add work     --token lin_api_xxx --teams "SWA,ENG" --default
+clinear auth add personal --token lin_api_yyy --teams "PER"
+clinear auth accounts          # see them, with [default]/[current]/teams markers
+```
+
+### How the active account is chosen (in order)
+
+1. `--account <name>` / `-a <name>` — explicit override
+2. **Team-key ownership** — if the command targets a team (via `--team SWA`
+   or an identifier like `SWA-20`), the account whose `teams` list contains
+   that key is chosen automatically. This is the "intelligent" path.
+3. **Workspace mapping** — `[workspaces]` maps a git-repo root → account, so
+   simply being inside a repo picks the right token. Inspect with
+   `clinear auth workspace`.
+4. Global `default_account`
+5. First configured account (fallback)
+
+### Token resolution (within the chosen account, in order)
 
 1. `--token <T>` CLI flag
-2. `$LINEAR_TOKEN` environment variable
-3. `auth.token` in `~/.config/clinear/config.toml`
+2. `$<account.token_env>` environment variable (default `LINEAR_TOKEN`)
+3. `token` stored in the account's config block (discouraged: plaintext)
 
-Verify the resolved source with `clinear auth status`. Tokens look like
-`lin_api_<long-random-string>` — get one at https://linear.app/settings/api.
+Verify what resolved with `clinear auth status` / `clinear auth accounts`.
+Tokens look like `lin_api_<long-random-string>` — get one at
+https://linear.app/settings/api.
+
+### Config schema (canonical — do NOT downgrade to `[auth]`)
+
+```toml
+[accounts.work]
+token_env = "LINEAR_TOKEN"   # or: token = "lin_api_..."
+teams = ["SWA", "ENG"]       # enables team-key auto-selection
+
+[accounts.personal]
+token = "lin_api_..."
+teams = ["PER"]
+
+[defaults]
+default_account = "work"
+
+[workspaces]
+"/home/me/work/acme" = "work"
+```
+
+> The legacy single `[auth]` section is auto-migrated to `accounts.default`
+> on load. Never hand-write `[auth]` — use `clinear auth add` instead.
 
 ## Exit Codes
 
@@ -260,20 +325,19 @@ The MCP server is read-only by design. Mutations go through this skill's
 
 ---
 
-## Config file keeps getting corrupted
+## Switching accounts ad-hoc
 
-The `~/.config/clinear/config.toml` can revert to an old multi-account schema clinear no longer accepts. Fix by rewriting minimal schema before use:
-
-```bash
-printf '[auth]\ntoken = "lin_api_..."\n' > ~/.config/clinear/config.toml
-```
-
-Or bypass config entirely with the `--token` global flag:
+The config is multi-account by design (see Authentication above). To run a
+single command against a specific account without changing the default:
 
 ```bash
-TOKEN="lin_api_..."
-clinear --token "$TOKEN" issue list --team SWA
+clinear --account personal issue list --team PER
+# or pin a one-off token (not stored):
+clinear --token "lin_api_..." issue list --team SWA
 ```
+
+If a command targets a team an account owns (`--teams`), the right account is
+chosen for you — no flag needed.
 
 ## Bulk reassign issues from one user to me
 
@@ -308,10 +372,10 @@ Generate a self-contained HTML board at a permanent path (not /tmp):
 
 ---
 
-## Known bug: WorkflowState enum breaks `issue state` and `team states`
+## WorkflowState enum — FIXED in 0.5.0
 
-If a team has a workflow state whose `type` is outside clinear's Pydantic enum
-(e.g. type `"duplicate"`), these commands fail with:
+Older versions (≤0.4.x) crashed on teams that had a workflow state whose
+`type` was outside the six documented categories (e.g. type `"duplicate"`):
 
 ```
 error: List items did not match WorkflowState: 1 validation error for WorkflowState
@@ -319,24 +383,38 @@ type
   Input should be 'triage', 'backlog', 'unstarted', 'started', 'completed' or 'canceled'
 ```
 
-This breaks BOTH `clinear team states <KEY>` AND `clinear issue state <ID> "<NAME>"`.
+This broke BOTH `clinear team states <KEY>` AND `clinear issue state <ID> "<NAME>"`.
 
-### Workaround via raw GraphQL
+**As of 0.5.0 this is fixed** — unknown state types pass through as plain
+strings, so `team states` / `issue state` work normally. Just run the command:
+
+```bash
+clinear team states SWA
+clinear issue state SWA-20 "Duplicate"
+```
+
+### Raw-GraphQL fallback (only needed on clinear ≤0.4.x)
 
 ```bash
 # 1. Get state IDs (raw bypasses the enum)
 clinear raw query 'query { team(id:"<TEAM_UUID>"){ states { nodes { id name type } } } }'
-
 # 2. Get issue UUID
 clinear -o json issue get SWA-20 2>/dev/null | python3 -c "import json,sys;print(json.load(sys.stdin)['id'])"
-
 # 3. Transition
 clinear raw query "mutation { issueUpdate(id: \"<ISSUE_UUID>\", input: { stateId: \"<STATE_ID>\" }) { success issue { identifier state { name } } } }"
 ```
 
 Note: `clinear raw query "<STRING>"` needs the literal `query` subcommand first.
 
-## clinear comment add: body is POSITIONAL, not `--body`
+## clinear comment add/edit: body is POSITIONAL, not `--body`
 
-`clinear comment add <ISSUE_ID> "<BODY>"` — there is NO `--body` flag.
-If body is omitted, it reads from stdin.
+`clinear comment add <ISSUE_ID> "<BODY>"` and
+`clinear comment edit <COMMENT_ID> "<BODY>"` — there is NO `--body` flag.
+If the body argument is omitted, it reads from stdin (good for piping):
+
+```bash
+git log -1 --pretty=%B | clinear comment add SWA-20
+```
+
+(Note: `clinear memory add --title "..." --body "..."` is a *different*
+command that DOES use `--body` — don't confuse the two.)
