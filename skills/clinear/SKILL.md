@@ -305,3 +305,38 @@ Generate a self-contained HTML board at a permanent path (not /tmp):
 - `/home/swarm/Work/mono/swarm-board.html`
 - Include: stats header, Mermaid dependency map, progress bars, issue cards with DoD checklists
 - Serve: `python3 -m http.server 8888` then `register_deployment(port=8888)`
+
+---
+
+## Known bug: WorkflowState enum breaks `issue state` and `team states`
+
+If a team has a workflow state whose `type` is outside clinear's Pydantic enum
+(e.g. type `"duplicate"`), these commands fail with:
+
+```
+error: List items did not match WorkflowState: 1 validation error for WorkflowState
+type
+  Input should be 'triage', 'backlog', 'unstarted', 'started', 'completed' or 'canceled'
+```
+
+This breaks BOTH `clinear team states <KEY>` AND `clinear issue state <ID> "<NAME>"`.
+
+### Workaround via raw GraphQL
+
+```bash
+# 1. Get state IDs (raw bypasses the enum)
+clinear raw query 'query { team(id:"<TEAM_UUID>"){ states { nodes { id name type } } } }'
+
+# 2. Get issue UUID
+clinear -o json issue get SWA-20 2>/dev/null | python3 -c "import json,sys;print(json.load(sys.stdin)['id'])"
+
+# 3. Transition
+clinear raw query "mutation { issueUpdate(id: \"<ISSUE_UUID>\", input: { stateId: \"<STATE_ID>\" }) { success issue { identifier state { name } } } }"
+```
+
+Note: `clinear raw query "<STRING>"` needs the literal `query` subcommand first.
+
+## clinear comment add: body is POSITIONAL, not `--body`
+
+`clinear comment add <ISSUE_ID> "<BODY>"` — there is NO `--body` flag.
+If body is omitted, it reads from stdin.
