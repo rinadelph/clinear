@@ -1,0 +1,74 @@
+name: Publish to PyPI
+
+# Publishes clinear to PyPI using PyPI Trusted Publishing (OIDC) — no API
+# token is stored in the repo. Triggers when a GitHub Release is published,
+# or manually via workflow_dispatch.
+#
+# One-time setup on PyPI (https://pypi.org/manage/project/clinear/settings/publishing/):
+#   - Add a "Trusted Publisher":
+#       Owner:            rinadelph
+#       Repository name:  clinear
+#       Workflow name:    publish.yml
+#       Environment name: pypi
+#
+# After that, every published GitHub Release ships the corresponding version.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Build sdist + wheel
+        run: |
+          rm -rf dist
+          uv build
+
+      - name: Verify version matches VERSION file
+        run: |
+          VER=$(cat VERSION)
+          echo "VERSION file: $VER"
+          ls -la dist/
+          test -f "dist/clinear-${VER}-py3-none-any.whl"
+          test -f "dist/clinear-${VER}.tar.gz"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/clinear/
+    permissions:
+      id-token: write  # required for Trusted Publishing (OIDC)
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # skip-existing avoids failures if a version was already uploaded
+          # out-of-band (e.g. via `uv publish`).
+          skip-existing: true
