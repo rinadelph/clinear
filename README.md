@@ -150,6 +150,23 @@ table_max_width = 120
 
 Run `clinear init` to scaffold the file.
 
+### Self-hosted backend
+
+Install `clinear[server]` to run the Linear-compatible backend with either
+isolated SQLite files or a shared PostgreSQL database:
+
+```bash
+pip install 'clinear[server]'
+clinear-serve seed --tenant local
+clinear-serve serve --tenant local
+```
+
+Point an account's `base_url` (or `LINEAR_API_URL`) at the resulting
+`/graphql` endpoint. `CLINEAR_DATABASE_URL` selects shared PostgreSQL storage,
+while `CLINEAR_APP_URL` controls the browser-facing issue and project links
+returned by the backend. See [the deployment guide](docs/DEPLOYMENT.md) for
+database precedence, multi-organization token provisioning, and health checks.
+
 ---
 
 ## Exit Codes (stable across versions)
@@ -172,7 +189,8 @@ Run `clinear init` to scaffold the file.
 
 - Token read from `$LINEAR_TOKEN`, `--token` flag, or `config.toml`. Never logged in plaintext.
 - HTTPS-only. TLS verification mandatory.
-- No telemetry. Zero outbound calls except to `api.linear.app`.
+- No telemetry. Outbound API calls go only to the configured account endpoint
+  (`api.linear.app` by default, or an explicitly configured compatible backend).
 - Pre-commit hook blocks committing tokens, `.log` files, `.env` files. See `scripts/pre-commit.sh`.
 
 ---

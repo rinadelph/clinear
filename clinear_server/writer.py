@@ -1,15 +1,15 @@
-"""Write operations — mutations with the per-team identifier counter, derived
-fields, and state-transition timestamps. Transaction-safe (single writer under
-SQLite WAL; counter bumped inside the same transaction as the insert).
-"""
+"""Write operations with transactional identifiers and derived fields."""
 from __future__ import annotations
 
-from sqlalchemy import and_, select
+from graphql import GraphQLError
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.engine import Engine
 
 from clinear_server.db import (
     PRIORITY_LABELS,
     comment,
+    cycle,
+    entity_url,
     issue,
     issue_label,
     issue_label_link,
@@ -18,7 +18,10 @@ from clinear_server.db import (
     organization,
     project,
     project_member,
+    project_team,
     team,
+    team_member,
+    user,
     workflow_state,
 )
 
@@ -33,6 +36,106 @@ def _slug(text: str, n: int = 24) -> str:
 def _org_url_key(conn, org_id: str) -> str:
     r = conn.execute(select(organization.c.url_key).where(organization.c.id == org_id)).first()
     return (r[0] if r and r[0] else "local")
+
+
+class InvalidReferenceError(GraphQLError):
+    def __init__(self, field: str) -> None:
+        super().__init__(
+            "Invalid reference",
+            extensions={"code": "BAD_USER_INPUT", "field": field},
+        )
+
+
+def _require_org_reference(conn, table, org_id: str, value: str, field: str, *extra) -> str:
+    conditions = [
+        table.c.id == value,
+        table.c.organization_id == org_id,
+        *extra,
+    ]
+    if "archived_at" in table.c:
+        conditions.append(table.c.archived_at.is_(None))
+    if not conn.execute(select(table.c.id).where(and_(*conditions))).first():
+        raise InvalidReferenceError(field)
+    return value
+
+
+def _require_team_user(conn, org_id: str, team_id: str, value: str, field: str) -> str:
+    row = conn.execute(
+        select(user.c.id)
+        .join(team_member, team_member.c.user_id == user.c.id)
+        .where(
+            and_(
+                user.c.id == value,
+                user.c.organization_id == org_id,
+                user.c.active.is_(True),
+                user.c.archived_at.is_(None),
+                team_member.c.team_id == team_id,
+            )
+        )
+    ).first()
+    if not row:
+        raise InvalidReferenceError(field)
+    return value
+
+
+def _validate_issue_references(
+    conn,
+    org_id: str,
+    team_id: str,
+    inp: dict,
+    *,
+    issue_id: str | None = None,
+    default_state_id: str | None = None,
+) -> None:
+    state_id = inp.get("stateId") if "stateId" in inp else default_state_id
+    if state_id:
+        _require_org_reference(
+            conn, workflow_state, org_id, state_id, "stateId",
+            workflow_state.c.team_id == team_id,
+        )
+    if assignee_id := inp.get("assigneeId"):
+        _require_team_user(conn, org_id, team_id, assignee_id, "assigneeId")
+    if project_id := inp.get("projectId"):
+        _require_org_reference(conn, project, org_id, project_id, "projectId")
+        project_teams = list(
+            conn.execute(
+                select(project_team.c.team_id).where(
+                    project_team.c.project_id == project_id
+                )
+            ).scalars()
+        )
+        if project_teams and team_id not in project_teams:
+            raise InvalidReferenceError("projectId")
+    if cycle_id := inp.get("cycleId"):
+        _require_org_reference(
+            conn, cycle, org_id, cycle_id, "cycleId", cycle.c.team_id == team_id
+        )
+    if parent_id := inp.get("parentId"):
+        if parent_id == issue_id:
+            raise InvalidReferenceError("parentId")
+        _require_org_reference(
+            conn, issue, org_id, parent_id, "parentId", issue.c.team_id == team_id
+        )
+    label_ids = inp.get("labelIds") if "labelIds" in inp else None
+    if label_ids:
+        expected = set(label_ids)
+        found = set(
+            conn.execute(
+                select(issue_label.c.id).where(
+                    and_(
+                        issue_label.c.id.in_(expected),
+                        issue_label.c.organization_id == org_id,
+                        issue_label.c.archived_at.is_(None),
+                        or_(
+                            issue_label.c.team_id.is_(None),
+                            issue_label.c.team_id == team_id,
+                        ),
+                    )
+                )
+            ).scalars()
+        )
+        if found != expected:
+            raise InvalidReferenceError("labelIds")
 
 
 class Writer:
@@ -50,8 +153,25 @@ class Writer:
                 return None
             trow = dict(trow._mapping)
             tid = trow["id"]
-            n = (trow.get("issue_counter") or 0) + 1
-            conn.execute(team.update().where(team.c.id == tid).values(issue_counter=n))
+            _validate_issue_references(
+                conn,
+                org_id,
+                tid,
+                inp,
+                default_state_id=trow.get("default_state_id"),
+            )
+            result = conn.execute(
+                team.update()
+                .where(and_(team.c.id == tid, team.c.organization_id == org_id))
+                .values(issue_counter=func.coalesce(team.c.issue_counter, 0) + 1)
+            )
+            if result.rowcount != 1:
+                raise InvalidReferenceError("teamId")
+            n = conn.execute(
+                select(team.c.issue_counter).where(
+                    and_(team.c.id == tid, team.c.organization_id == org_id)
+                )
+            ).scalar_one()
             ident = f"{trow['key']}-{n}"
             prio = int(inp.get("priority", 0) or 0)
             state_id = inp.get("stateId") or trow.get("default_state_id")
@@ -66,7 +186,7 @@ class Writer:
                 assignee_id=inp.get("assigneeId"), creator_id=viewer_id,
                 project_id=inp.get("projectId"), cycle_id=inp.get("cycleId"),
                 parent_id=inp.get("parentId"),
-                url=f"https://linear.app/{url_key}/issue/{ident}",
+                url=entity_url(url_key, "issue", ident),
                 branch_name=f"{viewer_id[:8]}/{ident.lower()}-{_slug(inp['title'])}",
                 due_date=inp.get("dueDate"), created_at=ts, updated_at=ts,
             ))
@@ -82,7 +202,11 @@ class Writer:
                 (issue.c.id == ident) | (issue.c.identifier == ident.upper())))).first()
             if not row:
                 return None
-            iid = dict(row._mapping)["id"]
+            issue_row = dict(row._mapping)
+            iid = issue_row["id"]
+            _validate_issue_references(
+                conn, org_id, issue_row["team_id"], inp, issue_id=iid
+            )
             ts = now_iso()
             values: dict = {"updated_at": ts}
             mapping = {
@@ -190,7 +314,9 @@ class Writer:
                 trow = conn.execute(select(team.c.id).where(and_(
                     team.c.organization_id == org_id,
                     (team.c.id == inp["teamId"]) | (team.c.key == str(inp["teamId"]).upper())))).first()
-                team_id = trow[0] if trow else None
+                if not trow:
+                    raise InvalidReferenceError("teamId")
+                team_id = trow[0]
             ts = now_iso()
             lid = new_id()
             conn.execute(issue_label.insert().values(
@@ -205,6 +331,26 @@ class Writer:
     # -------------------------------------------------------------- projects
     def project_create(self, org_id: str, viewer_id: str, inp: dict) -> str | None:
         with self.engine.begin() as conn:
+            if lead_id := inp.get("leadId"):
+                _require_org_reference(
+                    conn, user, org_id, lead_id, "leadId",
+                    user.c.active.is_(True),
+                )
+            team_ids = set(inp.get("teamIds") or [])
+            if team_ids:
+                found = set(
+                    conn.execute(
+                        select(team.c.id).where(
+                            and_(
+                                team.c.id.in_(team_ids),
+                                team.c.organization_id == org_id,
+                                team.c.archived_at.is_(None),
+                            )
+                        )
+                    ).scalars()
+                )
+                if found != team_ids:
+                    raise InvalidReferenceError("teamIds")
             ts = now_iso()
             pid = new_id()
             slug = _slug(inp["name"])
@@ -216,9 +362,11 @@ class Writer:
                 state=inp.get("state", "backlog"), progress=0,
                 lead_id=inp.get("leadId"), creator_id=viewer_id,
                 start_date=inp.get("startDate"), target_date=inp.get("targetDate"),
-                url=f"https://linear.app/{url_key}/project/{slug}",
+                url=entity_url(url_key, "project", slug),
                 created_at=ts, updated_at=ts))
             conn.execute(project_member.insert().values(project_id=pid, user_id=viewer_id))
+            for team_id in team_ids:
+                conn.execute(project_team.insert().values(project_id=pid, team_id=team_id))
             return pid
 
     def project_update(self, org_id: str, pid: str, inp: dict) -> str | None:
@@ -227,6 +375,11 @@ class Writer:
                 project.c.organization_id == org_id, project.c.id == pid))).first()
             if not row:
                 return None
+            if lead_id := inp.get("leadId"):
+                _require_org_reference(
+                    conn, user, org_id, lead_id, "leadId",
+                    user.c.active.is_(True),
+                )
             vals = {"updated_at": now_iso()}
             m = {"name": "name", "description": "description", "leadId": "lead_id",
                  "state": "state", "color": "color", "icon": "icon",

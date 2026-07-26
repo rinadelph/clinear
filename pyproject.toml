@@ -53,6 +53,7 @@ server = [
     "uvicorn>=0.30",
     "sqlalchemy>=2.0",
     "aiosqlite>=0.20",
+    "psycopg[binary]>=3.2",
 ]
 saas = [
     "asyncpg>=0.29",

@@ -6,14 +6,10 @@ clinear's Pydantic models expect.
 """
 from __future__ import annotations
 
-from typing import Any
-
 from sqlalchemy import and_, or_, select
 from sqlalchemy.engine import Engine
 
-from clinear_server import db
 from clinear_server.db import (
-    PRIORITY_LABELS,
     api_key,
     comment,
     cycle,
@@ -21,9 +17,6 @@ from clinear_server.db import (
     issue_label,
     issue_label_link,
     issue_subscriber,
-    new_id,
-    now_iso,
-    organization,
     project,
     project_member,
     team,
@@ -52,9 +45,25 @@ class Store:
         """token → {user_id, organization_id} or None."""
         th = token_hash(token)
         with self.engine.connect() as conn:
-            row = _one(conn, select(api_key).where(
-                and_(api_key.c.token_hash == th, api_key.c.revoked_at.is_(None))
-            ))
+            row = _one(
+                conn,
+                select(api_key)
+                .join(
+                    user,
+                    and_(
+                        user.c.id == api_key.c.user_id,
+                        user.c.organization_id == api_key.c.organization_id,
+                    ),
+                )
+                .where(
+                    and_(
+                        api_key.c.token_hash == th,
+                        api_key.c.revoked_at.is_(None),
+                        user.c.active.is_(True),
+                        user.c.archived_at.is_(None),
+                    )
+                ),
+            )
             return row
 
     # ------------------------------------------------------------ serializers

@@ -2,7 +2,7 @@
 
 A self-hosted GraphQL server that speaks the exact subset of the Linear API the
 `clinear` CLI uses. Run `clinear` **fully offline** against a single-file SQLite
-database, **multi-tenant**, with **no rate limits**.
+database or host many organizations in PostgreSQL, with **no rate limits**.
 
 > The CLI needs only one change to talk to it: an `accounts.<name>.base_url`
 > pointing at this server. Everything else is byte-for-byte identical.
@@ -10,7 +10,7 @@ database, **multi-tenant**, with **no rate limits**.
 ## Install
 
 ```bash
-pip install 'clinear[server]'      # adds ariadne, fastapi, uvicorn, sqlalchemy, aiosqlite
+pip install 'clinear[server]'  # includes the SQLite and psycopg 3 PostgreSQL drivers
 ```
 
 ## Quick start (offline, 60 seconds)
@@ -47,12 +47,19 @@ LINEAR_API_URL=http://127.0.0.1:8787/graphql clinear me
 
 | Command | Purpose |
 |---------|---------|
-| `clinear-serve seed`  | Provision a tenant DB (org/user/team/states/token). Prints the token. |
-| `clinear-serve serve` | Run the GraphQL server (`--host`, `--port`, `--open`, `--db`, `--tenant`). |
-| `clinear-serve token` | Mint an additional API token for a tenant. |
+| `clinear-serve migrate` | Apply outstanding ordered schema revisions. |
+| `clinear-serve seed`  | Provision an organization/user/team/states/token. Prints the token. |
+| `clinear-serve serve` | Run the GraphQL server (`--host`, `--port`, `--open`, database flags). |
+| `clinear-serve token` | Mint a token for a selected organization user. |
 
-`--open` (offline convenience): any token maps to the first seeded identity — no
-token management needed for single-user local dev.
+Every command resolves its database in this order: explicit `--database-url`,
+`CLINEAR_DATABASE_URL`, then the existing `--db` or `--tenant` SQLite path.
+`seed` applies migrations for local convenience; hosted deployments should run
+`migrate` as an explicit pre-deployment step. `serve` never mutates the schema.
+
+`--open` is an isolated-SQLite convenience only: any token maps to the identity
+only when exactly one organization and one user exist. It never chooses a global
+first user in a shared or ambiguous database.
 
 ## What it implements
 
@@ -83,10 +90,15 @@ effectively-unlimited values, so any client polling it is satisfied.
 
 ## Storage
 
-Offline: one SQLite file per tenant at
+Isolated mode uses one SQLite file per tenant at
 `$XDG_DATA_HOME/clinear/<tenant>.db` (default `~/.local/share/clinear/`), WAL mode.
-The schema carries `organization_id` on every table, so the same resolvers work
-against a shared Postgres database for a hosted/SaaS deployment (latent seam).
+Hosted mode accepts a SQLAlchemy PostgreSQL URL, uses psycopg 3 with connection
+pre-ping, and stores many organizations in one database. Every generated issue
+and project URL uses `CLINEAR_APP_URL` (default `http://localhost:8787`), so an
+owned deployment never depends on `linear.app`.
+
+See [the deployment guide](../docs/DEPLOYMENT.md) for PostgreSQL setup,
+organization seeding, explicit token selection, and operational checks.
 
 ## Architecture
 
@@ -97,7 +109,7 @@ clinear_server/
 ├── store.py         org-scoped reads + serializers + filter compilers
 ├── writer.py        mutations (identifier counter, derived fields)
 ├── resolvers.py     Ariadne bindings (Relay envelope, lazy field resolvers)
-├── app.py           Starlette app + token-auth middleware + /graphql + /health
+├── app.py           Starlette app + token auth + /graphql + /health + /ready
 └── cli.py           `clinear-serve` entry point (serve|seed|token)
 ```
 

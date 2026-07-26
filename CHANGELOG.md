@@ -28,6 +28,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     emits HTTP 429.
   - Per-team monotonic issue identifier counter (`ENG-1`, `ENG-2`, …), derived
     `priorityLabel`/`url`/`branchName`, and workflow state-transition timestamps.
+  - **PostgreSQL shared-database support:** all server commands resolve explicit
+    `--database-url` then `CLINEAR_DATABASE_URL` then the existing SQLite target;
+    psycopg 3 uses connection pre-ping and SQLite-only pragmas remain isolated.
+    Organization URL keys are unique, token minting explicitly selects an
+    organization and user/email in shared databases, API token hashes are
+    globally unique, and issue counters use a portable organization-scoped
+    atomic update in the insert transaction.
+  - Ordered schema revisions support upgrades of existing SQLite and PostgreSQL
+    deployments; `clinear-serve migrate` is the explicit hosted deployment step.
+  - Mutation references are validated against the authenticated organization
+    and compatible team before writes, including states, assignees, projects,
+    cycles, parents, labels, project leads, and project-team relationships.
+  - `$CLINEAR_APP_URL` configures generated issue/project links for owned hosted
+    deployments (local default `http://localhost:8787`), and `/ready` verifies
+    database connectivity plus schema currency separately from `/health`.
 - **`base_url` account setting** (`accounts.<name>.base_url`) plus the
   `$LINEAR_API_URL` environment override, letting clinear point at a local
   backend (or any Linear-compatible endpoint) with no other change. Defaults to
@@ -37,8 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   issue create/get/state/assign/prio, comments, filters, search, labels, auth).
 
 ### Notes
-- Sync (offline↔online op-log + LWW) and the Postgres/SaaS storage backend are
-  designed (see `.swarm/recon/SYNTH.md`) and left as latent seams; not built here.
+- Sync (offline↔online op-log + LWW) remains a separate, unimplemented feature.
 
 ---
 

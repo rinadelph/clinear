@@ -7,11 +7,13 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
+PYTHON="${CLINEAR_PYTHON:-python3}"
 
 PORT="${PORT:-8796}"
 DB="/tmp/clinear_e2e_$$.db"
-TOK="clinear_test_token_e2e"
+TOK="clinear_test_token_e2e_$$"
 CFG="/tmp/clinear_e2e_$$.toml"
+ENVFILE="/tmp/clinear_e2e_$$.env"
 SESS="clinear_e2e_$$"
 URL="http://127.0.0.1:${PORT}/graphql"
 PASS=0; FAIL=0
@@ -20,17 +22,23 @@ ok(){ echo "  PASS: $1"; PASS=$((PASS+1)); }
 bad(){ echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 check(){ if echo "$2" | grep -q "$3"; then ok "$1"; else bad "$1 (got: $(echo "$2"|head -1))"; fi; }
 
-cleanup(){ tmux kill-session -t "$SESS" 2>/dev/null; rm -f "$DB"* "$CFG"; }
+cleanup(){ tmux kill-session -t "$SESS" 2>/dev/null; rm -f "$DB"* "$CFG" "$ENVFILE"; }
 trap cleanup EXIT
 
+: > "$ENVFILE"
+chmod 600 "$ENVFILE"
+if [ -n "${CLINEAR_DATABASE_URL:-}" ]; then
+  printf 'export CLINEAR_DATABASE_URL=%q\n' "$CLINEAR_DATABASE_URL" > "$ENVFILE"
+fi
+
 echo "== seeding tenant =="
-python3 -m clinear_server.cli seed --db "$DB" --token "$TOK" --no-demo >/dev/null
+"$PYTHON" -m clinear_server.cli seed --db "$DB" --org-key "e2e-$$" --token "$TOK" --no-demo >/dev/null
 
 echo "== starting server in tmux =="
 tmux kill-session -t "$SESS" 2>/dev/null
-tmux new-session -d -s "$SESS" "cd '$ROOT' && exec python3 -m clinear_server.cli serve --db '$DB' --port $PORT --log-level warning > /tmp/${SESS}.log 2>&1"
-for i in $(seq 1 20); do curl -sf "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1 && break; sleep 1; done
-curl -sf "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1 || { echo "server failed to start"; cat /tmp/${SESS}.log; exit 1; }
+tmux new-session -d -s "$SESS" "cd '$ROOT' && . '$ENVFILE' && exec '$PYTHON' -m clinear_server.cli serve --db '$DB' --port $PORT --log-level warning > /tmp/${SESS}.log 2>&1"
+for i in $(seq 1 20); do curl -sf "http://127.0.0.1:${PORT}/ready" >/dev/null 2>&1 && break; sleep 1; done
+curl -sf "http://127.0.0.1:${PORT}/ready" >/dev/null 2>&1 || { echo "server failed readiness"; cat /tmp/${SESS}.log; exit 1; }
 
 cat > "$CFG" <<TOML
 [accounts.local]
@@ -40,7 +48,7 @@ token = "$TOK"
 default_account = "local"
 TOML
 export CLINEAR_CONFIG="$CFG"
-C="python3 -m clinear --account local"
+C="$PYTHON -m clinear --account local"
 
 echo "== running CLI matrix =="
 check "me"              "$($C -o json me 2>&1)"                       '"email"'

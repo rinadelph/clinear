@@ -1,53 +1,83 @@
 """`clinear-serve` entry point.
 
 Subcommands:
-  serve   Start the local GraphQL backend (FastAPI + Ariadne + SQLite).
-  seed    Create/seed a tenant DB (org, user, team, states, token) and print the token.
-  token   Mint a new API token for an existing tenant.
+  serve   Start the GraphQL backend.
+  seed    Create an organization, user, team, states, and token.
+  token   Mint a token for an existing organization user.
 """
 from __future__ import annotations
 
 import argparse
 import sys
 
+from sqlalchemy.exc import IntegrityError
+
 from clinear_server import __version__
 from clinear_server.db import (
     api_key,
-    db_path_for,
+    display_database_target,
     gen_token,
     make_engine,
     migrate,
     new_id,
     now_iso,
+    resolve_database_target,
+    resolve_token_identity,
     seed_tenant,
     token_hash,
-    user,
 )
+
+
+def _database_target(args) -> str:
+    return resolve_database_target(
+        database_url=args.database_url,
+        db_path=args.db,
+        tenant=args.tenant,
+    )
 
 
 def _cmd_serve(args):
     import uvicorn
+
     from clinear_server.app import create_app
-    db_path = args.db or str(db_path_for(args.tenant))
-    app = create_app(db_path, open_mode=args.open)
+    target = _database_target(args)
+    app = create_app(database_url=target, open_mode=args.open)
     print(f"clinear-serve v{__version__}")
     print(f"  tenant : {args.tenant}")
-    print(f"  db     : {db_path}")
+    print(f"  db     : {display_database_target(target)}")
     print(f"  url    : http://{args.host}:{args.port}/graphql")
     print(f"  open   : {args.open}")
     uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
 
 
+def _cmd_migrate(args):
+    target = _database_target(args)
+    engine = make_engine(target)
+    try:
+        migrate(engine)
+    except (RuntimeError, IntegrityError) as exc:
+        print(f"Migration failed: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+    finally:
+        engine.dispose()
+    print(f"Migrated database at {display_database_target(target)}")
+
+
 def _cmd_seed(args):
-    db_path = args.db or str(db_path_for(args.tenant))
-    engine = make_engine(db_path)
+    target = _database_target(args)
+    engine = make_engine(target)
     migrate(engine)
-    info = seed_tenant(
-        engine, org_name=args.org, team_key=args.team_key, team_name=args.team_name,
-        user_name=args.user, user_email=args.email,
-        token=args.token, demo_issues=not args.no_demo,
-    )
-    print(f"Seeded tenant '{args.tenant}' at {db_path}")
+    try:
+        info = seed_tenant(
+            engine, org_name=args.org, org_url_key=args.org_key,
+            team_key=args.team_key, team_name=args.team_name,
+            user_name=args.user, user_email=args.email,
+            token=args.token, demo_issues=not args.no_demo,
+        )
+    except ValueError as exc:
+        print(f"Seed failed: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+    print(f"Seeded tenant '{args.tenant}' at {display_database_target(target)}")
     print(f"  org      : {args.org}")
     print(f"  team     : {info['team_key']}")
     print(f"  user     : {args.user} <{args.email}>")
@@ -59,19 +89,27 @@ def _cmd_seed(args):
 
 
 def _cmd_token(args):
-    db_path = args.db or str(db_path_for(args.tenant))
-    engine = make_engine(db_path)
-    from sqlalchemy import select
-    with engine.begin() as conn:
-        row = conn.execute(select(user.c.id, user.c.organization_id)
-                           .order_by(user.c.created_at).limit(1)).first()
-        if not row:
-            print("No user found — run 'clinear-serve seed' first.", file=sys.stderr)
-            sys.exit(1)
-        tok = args.token or gen_token()
-        conn.execute(api_key.insert().values(
-            id=new_id(), token_hash=token_hash(tok), label=args.label,
-            user_id=row[0], organization_id=row[1], created_at=now_iso()))
+    target = _database_target(args)
+    engine = make_engine(target)
+    try:
+        user_id, org_id = resolve_token_identity(
+            engine,
+            organization_ref=args.organization,
+            user_ref=args.user,
+            email=args.email,
+        )
+    except ValueError as exc:
+        print(f"Token creation failed: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+    try:
+        with engine.begin() as conn:
+            tok = args.token or gen_token()
+            conn.execute(api_key.insert().values(
+                id=new_id(), token_hash=token_hash(tok), label=args.label,
+                user_id=user_id, organization_id=org_id, created_at=now_iso()))
+    except IntegrityError as exc:
+        print("Token creation failed: API token already exists.", file=sys.stderr)
+        raise SystemExit(1) from exc
     print(tok)
 
 
@@ -82,6 +120,7 @@ def main(argv=None):
 
     s = sub.add_parser("serve", help="start the GraphQL server")
     s.add_argument("--tenant", default="default")
+    s.add_argument("--database-url", default=None, help="explicit SQLAlchemy database URL")
     s.add_argument("--db", default=None, help="explicit DB path (overrides tenant)")
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8787)
@@ -89,10 +128,18 @@ def main(argv=None):
     s.add_argument("--log-level", default="warning")
     s.set_defaults(func=_cmd_serve)
 
+    mg = sub.add_parser("migrate", help="apply outstanding database schema revisions")
+    mg.add_argument("--tenant", default="default")
+    mg.add_argument("--database-url", default=None, help="explicit SQLAlchemy database URL")
+    mg.add_argument("--db", default=None)
+    mg.set_defaults(func=_cmd_migrate)
+
     sd = sub.add_parser("seed", help="seed a tenant DB")
     sd.add_argument("--tenant", default="default")
+    sd.add_argument("--database-url", default=None, help="explicit SQLAlchemy database URL")
     sd.add_argument("--db", default=None)
     sd.add_argument("--org", default="Local")
+    sd.add_argument("--org-key", default=None, help="unique organization URL key")
     sd.add_argument("--team-key", default="ENG")
     sd.add_argument("--team-name", default="Engineering")
     sd.add_argument("--user", default="Local User")
@@ -103,7 +150,11 @@ def main(argv=None):
 
     t = sub.add_parser("token", help="mint a new token for a tenant")
     t.add_argument("--tenant", default="default")
+    t.add_argument("--database-url", default=None, help="explicit SQLAlchemy database URL")
     t.add_argument("--db", default=None)
+    t.add_argument("--organization", default=None, help="organization ID or URL key")
+    t.add_argument("--user", default=None, help="user ID in the selected organization")
+    t.add_argument("--email", default=None, help="user email in the selected organization")
     t.add_argument("--token", default=None)
     t.add_argument("--label", default="cli")
     t.set_defaults(func=_cmd_token)
