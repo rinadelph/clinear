@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.6.0] — 2026-07-15
+
+### Added
+- **`clinear-serve` — a local, self-hosted, Linear-API-compatible backend**
+  (new optional `clinear_server` package; install with `pip install 'clinear[server]'`).
+  Speaks the exact GraphQL subset clinear sends (13 queries + 12 mutations), so
+  the CLI runs fully **offline** against a single-file SQLite database with **no
+  rate limits**.
+  - `clinear-serve seed` provisions a tenant (org, admin user, team, seeded
+    workflow states, API token) and prints the token.
+  - `clinear-serve serve` runs the GraphQL server on `127.0.0.1` (FastAPI/Starlette
+    + Ariadne + SQLAlchemy Core). `--open` enables zero-friction offline mode
+    (any token maps to the seeded identity).
+  - `clinear-serve token` mints additional tokens for a tenant.
+  - **Multi-tenant by token:** each API token maps to exactly one organization;
+    every resolver is org-scoped, so tenants are isolated by construction. One
+    backend endpoint serves N tenants via N tokens.
+  - Implements `rateLimitStatus` returning effectively-unlimited values and never
+    emits HTTP 429.
+  - Per-team monotonic issue identifier counter (`ENG-1`, `ENG-2`, …), derived
+    `priorityLabel`/`url`/`branchName`, and workflow state-transition timestamps.
+- **`base_url` account setting** (`accounts.<name>.base_url`) plus the
+  `$LINEAR_API_URL` environment override, letting clinear point at a local
+  backend (or any Linear-compatible endpoint) with no other change. Defaults to
+  the real Linear API when unset.
+- `scripts/e2e-local-backend.sh` — a 17-check end-to-end suite that boots the
+  local backend and drives the real clinear CLI against it (me, teams, states,
+  issue create/get/state/assign/prio, comments, filters, search, labels, auth).
+
+### Notes
+- Sync (offline↔online op-log + LWW) and the Postgres/SaaS storage backend are
+  designed (see `.swarm/recon/SYNTH.md`) and left as latent seams; not built here.
+
+---
+
 ## [0.5.0] — 2026-06-24
 ### Added
 - **Intelligent account auto-selection by team key.** Accounts can now declare

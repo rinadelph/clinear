@@ -24,7 +24,7 @@ from clinear.commands.project import project_app
 from clinear.commands.raw import raw_app
 from clinear.commands.team import team_app
 from clinear.commands.update import update_app
-from clinear.config import load_config, resolve_account, resolve_token
+from clinear.config import load_config, resolve_account, resolve_base_url, resolve_token
 from clinear.errors import ClinearError
 from clinear.models.enums import OutputFormat
 from clinear.output import emit_error
@@ -94,9 +94,11 @@ def main(
             account, config, team_key=team_hint
         )
         resolved_token = resolve_token(token, account_cfg)
+        resolved_base_url = resolve_base_url(None, account_cfg)
     except ClinearError:
         account_name = ""
         resolved_token = ""
+        resolved_base_url = None
 
     state = CLIState(
         token=resolved_token,
@@ -108,6 +110,7 @@ def main(
         dry_run=dry_run,
         timeout=timeout,
         account_name=account_name,
+        base_url=resolved_base_url,
     )
     set_state(state)
 

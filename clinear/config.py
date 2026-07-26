@@ -47,6 +47,10 @@ class AccountConfig(BaseModel):
     token: str | None = None
     token_env: str = "LINEAR_TOKEN"
     org_name: str | None = None
+    # GraphQL endpoint override. Point this at a local clinear-serve backend
+    # (e.g. "http://127.0.0.1:8787/graphql") to run fully offline. When unset,
+    # clinear talks to the real Linear API. $LINEAR_API_URL overrides this too.
+    base_url: str | None = None
     # Team keys this account owns (e.g. ["SWA", "ENG"]). Used for intelligent
     # account auto-selection: a command targeting team SWA (via --team SWA or
     # an identifier like SWA-20) picks the account that lists "SWA" here.
@@ -302,6 +306,22 @@ def resolve_token(
             f"{config_path()}"
         ),
     )
+
+
+def resolve_base_url(
+    cli_base_url: str | None,
+    account: AccountConfig,
+) -> str | None:
+    """Resolve the GraphQL endpoint override.
+
+    Order: --api-url flag > $LINEAR_API_URL env > account.base_url > None.
+    Returning None means "use the LinearClient default" (the real Linear API).
+    """
+    if cli_base_url:
+        return cli_base_url
+    if env_url := os.environ.get("LINEAR_API_URL"):
+        return env_url
+    return account.base_url
 
 
 def redact_token(token: str) -> str:

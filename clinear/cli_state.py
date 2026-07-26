@@ -27,6 +27,7 @@ class CLIState:
     dry_run: bool = False
     timeout: float = 30.0
     account_name: str = ""  # active account name for context display
+    base_url: str | None = None  # GraphQL endpoint override (local backend)
 
 
 _state = CLIState()
@@ -44,8 +45,11 @@ def set_state(state: CLIState) -> None:
 def build_client(state: CLIState | None = None) -> LinearClient:
     """Construct a LinearClient configured from the current CLI state."""
     s = state or _state
-    return LinearClient(
+    kwargs = dict(
         token=s.token,
         timeout=s.timeout,
         verbose=s.verbose,
     )
+    if s.base_url:
+        kwargs["base_url"] = s.base_url
+    return LinearClient(**kwargs)

@@ -1,0 +1,11 @@
+"""clinear_server — local, Linear-API-compatible GraphQL backend for the clinear CLI.
+
+Wire-compatible with the ~25 Linear GraphQL operations clinear actually sends.
+Offline-first (SQLite per tenant), multi-tenant by token, no rate limits.
+"""
+from pathlib import Path
+
+try:
+    __version__ = (Path(__file__).resolve().parent.parent / "VERSION").read_text().strip()
+except Exception:  # pragma: no cover
+    __version__ = "0.0.0"

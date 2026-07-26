@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "clinear"
-version = "0.5.0"
+version = "0.6.0"
 description = "Type-safe Linear CLI built on Pydantic v2"
 readme = "README.md"
 license = { text = "MIT" }
@@ -47,10 +47,21 @@ dev = [
 mcp = [
     "mcp>=1.12.0",
 ]
+server = [
+    "ariadne>=0.23",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "sqlalchemy>=2.0",
+    "aiosqlite>=0.20",
+]
+saas = [
+    "asyncpg>=0.29",
+]
 
 [project.scripts]
 clinear = "clinear.cli:app"
 clinear-mcp = "clinear.mcp.server:main"
+clinear-serve = "clinear_server.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/Clover/clinear"
@@ -58,11 +69,12 @@ Documentation = "https://github.com/Clover/clinear/blob/main/docs/DESIGN.md"
 Issues = "https://github.com/Clover/clinear/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["clinear"]
+packages = ["clinear", "clinear_server"]
 artifacts = ["VERSION"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "VERSION" = "VERSION"
+"clinear_server/schema.graphql" = "clinear_server/schema.graphql"
 
 [tool.ruff]
 target-version = "py310"
