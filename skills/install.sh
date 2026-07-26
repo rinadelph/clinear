@@ -1,42 +1,28 @@
 #!/usr/bin/env bash
-# Install the clinear skill into the user's skill directories.
-#
-# Default behavior: install into BOTH
-#   ~/.swarmos/skills/clinear     (for Swarm OS agents)
-#   ~/.claude/skills/clinear      (for Claude Code / Claude Desktop)
-#
-# Flags:
-#   --swarm-only      Install only the Swarm OS location
-#   --claude-only     Install only the Claude location
-#   --copy            Use `cp -r` instead of symlinks (e.g. for read-only systems)
-#   --uninstall       Remove the installed skill from both locations
+# Install the Cliniar agent skill into Swarm OS and/or Claude skill directories.
 #
 # Usage:
-#   bash skills/install.sh              # install to both
-#   bash skills/install.sh --swarm-only
-#   bash skills/install.sh --uninstall
-
+#   bash skills/install.sh [--swarm-only|--claude-only] [--copy]
+#   bash skills/install.sh --legacy-links   # also add deprecated clinear links
+#   bash skills/install.sh --uninstall [--legacy-links]
 set -euo pipefail
 
-# Resolve the source dir to an absolute path so symlinks work from anywhere.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SRC="$SCRIPT_DIR/clinear"
-
-SWARM_DIR="$HOME/.swarmos/skills/clinear"
-CLAUDE_DIR="$HOME/.claude/skills/clinear"
-
+SRC="$SCRIPT_DIR/cliniar"
 MODE="symlink"
-TARGETS=("swarm" "claude")
 ACTION="install"
+TARGETS=("swarm" "claude")
+LEGACY_LINKS=0
 
-while [ $# -gt 0 ]; do
+while [ "$#" -gt 0 ]; do
     case "$1" in
-        --swarm-only)  TARGETS=("swarm") ;;
+        --swarm-only) TARGETS=("swarm") ;;
         --claude-only) TARGETS=("claude") ;;
-        --copy)        MODE="copy" ;;
-        --uninstall)   ACTION="uninstall" ;;
+        --copy) MODE="copy" ;;
+        --legacy-links) LEGACY_LINKS=1 ;;
+        --uninstall) ACTION="uninstall" ;;
         -h|--help)
-            sed -n '2,/^set -e/p' "$0" | sed 's/^# \{0,1\}//' | head -20
+            sed -n '2,/^set -e/p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -44,64 +30,79 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-target_path() {
+skill_root() {
     case "$1" in
-        swarm)  echo "$SWARM_DIR" ;;
-        claude) echo "$CLAUDE_DIR" ;;
+        swarm) printf '%s\n' "$HOME/.swarmos/skills" ;;
+        claude) printf '%s\n' "$HOME/.claude/skills" ;;
     esac
 }
 
+remove_managed_link() {
+    local path="$1"
+    local expected="$2"
+    if [ -L "$path" ]; then
+        if [ "$(readlink "$path")" = "$expected" ]; then
+            rm -- "$path"
+        else
+            echo "  refusing to remove unmanaged symlink: $path" >&2
+            return 1
+        fi
+    elif [ -e "$path" ]; then
+        echo "  refusing to remove unmanaged path: $path" >&2
+        return 1
+    fi
+}
+
 install_one() {
-    local target_name="$1"
-    local target_path; target_path=$(target_path "$target_name")
-    local parent; parent=$(dirname "$target_path")
+    local root canonical legacy
+    root="$(skill_root "$1")"
+    canonical="$root/cliniar"
+    legacy="$root/clinear"
+    mkdir -p "$root"
 
-    mkdir -p "$parent"
-
-    if [ -L "$target_path" ] || [ -d "$target_path" ]; then
-        echo "  removing existing $target_path"
-        rm -rf "$target_path"
+    remove_managed_link "$canonical" "$SRC"
+    if [ "$MODE" = "copy" ]; then
+        if [ -e "$canonical" ]; then
+            echo "  refusing to overwrite unmanaged path: $canonical" >&2
+            return 1
+        fi
+        cp -R "$SRC" "$canonical"
+        echo "  installed copy: $canonical"
+    else
+        ln -s "$SRC" "$canonical"
+        echo "  installed symlink: $canonical"
     fi
 
-    if [ "$MODE" = "copy" ]; then
-        cp -r "$SRC" "$target_path"
-        echo "  installed (copy) → $target_path"
-    else
-        if ln -s "$SRC" "$target_path" 2>/dev/null; then
-            echo "  installed (symlink) → $target_path"
-        else
-            echo "  symlink failed, falling back to copy"
-            cp -r "$SRC" "$target_path"
-            echo "  installed (copy) → $target_path"
+    if [ "$LEGACY_LINKS" -eq 1 ]; then
+        if ! remove_managed_link "$legacy" "$canonical"; then
+            echo "  keeping unmanaged legacy path: $legacy" >&2
+            return 0
         fi
+        ln -s "$canonical" "$legacy"
+        echo "  installed deprecated compatibility symlink: $legacy"
     fi
 }
 
 uninstall_one() {
-    local target_name="$1"
-    local target_path; target_path=$(target_path "$target_name")
-    if [ -L "$target_path" ] || [ -d "$target_path" ]; then
-        rm -rf "$target_path"
-        echo "  removed $target_path"
-    else
-        echo "  not present: $target_path"
+    local root canonical legacy
+    root="$(skill_root "$1")"
+    canonical="$root/cliniar"
+    legacy="$root/clinear"
+    remove_managed_link "$canonical" "$SRC" || true
+    if [ "$LEGACY_LINKS" -eq 1 ]; then
+        remove_managed_link "$legacy" "$canonical" || true
     fi
 }
 
 if [ ! -d "$SRC" ]; then
     echo "ERROR: source directory not found: $SRC" >&2
-    echo "Run this from a checked-out clinear repository." >&2
     exit 1
 fi
 
-case "$ACTION" in
-    install)
-        echo "Installing clinear skill (mode: $MODE)"
-        for t in "${TARGETS[@]}"; do install_one "$t"; done
-        echo "Done. Verify with: ls -la $HOME/.swarmos/skills/clinear $HOME/.claude/skills/clinear 2>/dev/null || true"
-        ;;
-    uninstall)
-        echo "Uninstalling clinear skill"
-        for t in "${TARGETS[@]}"; do uninstall_one "$t"; done
-        ;;
-esac
+if [ "$ACTION" = "install" ]; then
+    echo "Installing Cliniar skill (mode: $MODE)"
+    for target in "${TARGETS[@]}"; do install_one "$target"; done
+else
+    echo "Uninstalling managed Cliniar skill paths"
+    for target in "${TARGETS[@]}"; do uninstall_one "$target"; done
+fi

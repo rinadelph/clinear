@@ -14,8 +14,8 @@ pytest.importorskip("starlette")
 from sqlalchemy import inspect, select
 from starlette.testclient import TestClient
 
-from clinear_server.app import create_app
-from clinear_server.db import (
+from cliniar_server.app import create_app
+from cliniar_server.db import (
     CURRENT_SCHEMA_REVISION,
     api_key,
     applied_schema_revision,
@@ -39,8 +39,8 @@ from clinear_server.db import (
     token_hash,
     workflow_state,
 )
-from clinear_server.store import Store
-from clinear_server.writer import InvalidReferenceError, Writer
+from cliniar_server.store import Store
+from cliniar_server.writer import InvalidReferenceError, Writer
 
 
 def _seed(
@@ -64,7 +64,7 @@ def _seed(
 
 def test_database_target_precedence(monkeypatch, tmp_path) -> None:
     sqlite_path = tmp_path / "fallback.db"
-    monkeypatch.setenv("CLINEAR_DATABASE_URL", "sqlite:///environment.db")
+    monkeypatch.setenv("CLINIAR_DATABASE_URL", "sqlite:///environment.db")
 
     assert resolve_database_target(
         database_url="sqlite:///explicit.db",
@@ -73,7 +73,7 @@ def test_database_target_precedence(monkeypatch, tmp_path) -> None:
     ) == "sqlite:///explicit.db"
     assert resolve_database_target(db_path=sqlite_path) == "sqlite:///environment.db"
 
-    monkeypatch.delenv("CLINEAR_DATABASE_URL")
+    monkeypatch.delenv("CLINIAR_DATABASE_URL")
     assert resolve_database_target(db_path=sqlite_path) == str(sqlite_path)
 
 
@@ -508,7 +508,7 @@ def test_token_identity_requires_unambiguous_selection_in_sqlite(tmp_path) -> No
 
 
 def test_generated_urls_use_configured_application_url(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("CLINEAR_APP_URL", "https://issues.example.test/root/")
+    monkeypatch.setenv("CLINIAR_APP_URL", "https://issues.example.test/root/")
     engine = make_engine(tmp_path / "urls.db")
     migrate(engine)
     seeded = _seed(engine, name="Example", key="example", email="user@example.test")
@@ -590,7 +590,7 @@ def test_health_stays_available_when_schema_is_unmigrated(tmp_path) -> None:
 
 
 def test_cloverops_graphql_operation_contract(tmp_path) -> None:
-    target = os.environ.get("CLINEAR_TEST_POSTGRES_URL") or (
+    target = os.environ.get("CLINIAR_TEST_POSTGRES_URL") or (
         tmp_path / "cloverops-contract.db"
     )
     suffix = uuid.uuid4().hex[:12]

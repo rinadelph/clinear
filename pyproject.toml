@@ -3,14 +3,14 @@ requires = ["hatchling>=1.21"]
 build-backend = "hatchling.build"
 
 [project]
-name = "clinear"
-version = "0.6.0"
-description = "Type-safe Linear CLI built on Pydantic v2"
+name = "cliniar"
+version = "0.7.0"
+description = "Self-hosted, offline-first, agent-native work management with Linear compatibility"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
-authors = [
-    { name = "Clover", email = "rnadales@cloverve.com" },
+maintainers = [
+    { name = "Rinadelph" },
 ]
 keywords = ["linear", "cli", "issue-tracker", "pydantic", "graphql"]
 classifiers = [
@@ -60,22 +60,25 @@ saas = [
 ]
 
 [project.scripts]
-clinear = "clinear.cli:app"
-clinear-mcp = "clinear.mcp.server:main"
-clinear-serve = "clinear_server.cli:main"
+cliniar = "cliniar.cli:app"
+cliniar-mcp = "cliniar.mcp.server:main"
+cliniar-serve = "cliniar_server.cli:main"
+clinear = "cliniar.cli:app"
+clinear-mcp = "cliniar.mcp.server:main"
+clinear-serve = "cliniar_server.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/Clover/clinear"
-Documentation = "https://github.com/Clover/clinear/blob/main/docs/DESIGN.md"
-Issues = "https://github.com/Clover/clinear/issues"
+Homepage = "https://github.com/rinadelph/cliniar"
+Documentation = "https://github.com/rinadelph/cliniar/blob/main/docs/DESIGN.md"
+Issues = "https://github.com/rinadelph/cliniar/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["clinear", "clinear_server"]
+packages = ["cliniar", "cliniar_server", "clinear", "clinear_server"]
 artifacts = ["VERSION"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "VERSION" = "VERSION"
-"clinear_server/schema.graphql" = "clinear_server/schema.graphql"
+"cliniar_server/schema.graphql" = "cliniar_server/schema.graphql"
 
 [tool.ruff]
 target-version = "py310"

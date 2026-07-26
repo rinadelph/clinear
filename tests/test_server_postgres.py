@@ -1,4 +1,4 @@
-"""PostgreSQL integration tests, gated by CLINEAR_TEST_POSTGRES_URL."""
+"""PostgreSQL integration tests, gated by CLINIAR_TEST_POSTGRES_URL."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ pytest.importorskip("psycopg")
 
 from sqlalchemy import delete, select
 
-from clinear_server.db import (
+from cliniar_server.db import (
     issue,
     issue_label_link,
     issue_subscriber,
@@ -28,13 +28,13 @@ from clinear_server.db import (
     team,
     team_member,
 )
-from clinear_server.store import Store
-from clinear_server.writer import Writer
+from cliniar_server.store import Store
+from cliniar_server.writer import Writer
 
-POSTGRES_URL = os.environ.get("CLINEAR_TEST_POSTGRES_URL")
+POSTGRES_URL = os.environ.get("CLINIAR_TEST_POSTGRES_URL")
 pytestmark = pytest.mark.skipif(
     not POSTGRES_URL,
-    reason="CLINEAR_TEST_POSTGRES_URL is not configured",
+    reason="CLINIAR_TEST_POSTGRES_URL is not configured",
 )
 
 

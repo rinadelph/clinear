@@ -1,1 +1,0 @@
-../../../clinear/skill_content/overview.md

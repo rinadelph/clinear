@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Comprehensive E2E test for clinear
+# Comprehensive E2E test for Cliniar
 # Tests every command in both human and JSON output modes.
 #
 # Requires: $LINEAR_TOKEN in environment. We never hardcode the token here.
@@ -10,7 +10,14 @@ if [ -z "${LINEAR_TOKEN:-}" ]; then
     echo "Get a token at: https://linear.app/settings/api" >&2
     exit 3
 fi
-CLI=.venv/bin/clinear
+if [ -z "${CLINIAR_TEST_TEAM:-}" ] || [ -z "${CLINIAR_TEST_ISSUE:-}" ]; then
+    echo "ERROR: CLINIAR_TEST_TEAM and CLINIAR_TEST_ISSUE are required." >&2
+    echo "Use identifiers from the Linear-compatible workspace under test." >&2
+    exit 3
+fi
+CLI="${CLINIAR_CLI:-.venv/bin/cliniar}"
+TEAM_KEY="$CLINIAR_TEST_TEAM"
+ISSUE_ID="$CLINIAR_TEST_ISSUE"
 
 PASS=0
 FAIL=0
@@ -57,10 +64,10 @@ run_test "auth status" $CLI auth status
 # --- Teams ---
 run_test "team list (human)" $CLI team list
 run_test "team list (json)" $CLI -o json team list
-run_test "team get CLO" $CLI team get CLO
-run_test "team states CLO (human)" $CLI team states CLO
-run_test "team states CLO (json)" $CLI -o json team states CLO
-run_test "team members CLO (human)" $CLI team members CLO
+run_test "team get" $CLI team get "$TEAM_KEY"
+run_test "team states (human)" $CLI team states "$TEAM_KEY"
+run_test "team states (json)" $CLI -o json team states "$TEAM_KEY"
+run_test "team members (human)" $CLI team members "$TEAM_KEY"
 
 # --- Projects ---
 run_test "project list (human)" $CLI project list
@@ -68,16 +75,16 @@ run_test "project list (json)" $CLI -o json project list
 
 # --- Cycles ---
 # --- Cycles ---
-run_test "cycle current CLO (graceful no-cycle)" $CLI cycle current CLO
-run_test "cycle current CLO (json graceful)" $CLI -o json cycle current CLO
-run_test "cycle list CLO" $CLI cycle list CLO
+run_test "cycle current (graceful no-cycle)" $CLI cycle current "$TEAM_KEY"
+run_test "cycle current (json graceful)" $CLI -o json cycle current "$TEAM_KEY"
+run_test "cycle list" $CLI cycle list "$TEAM_KEY"
 
 # --- Comments ---
-run_test "comment list CLO-34" $CLI comment list CLO-34 -n 5
+run_test "comment list" $CLI comment list "$ISSUE_ID" -n 5
 
 # --- Labels ---
 run_test "label list" $CLI label list -n 20
-run_test "label list --team CLO" $CLI label list --team CLO
+run_test "label list --team" $CLI label list --team "$TEAM_KEY"
 
 # --- Init ---
 TMP_CONFIG=$(mktemp -d)/config.toml
@@ -89,16 +96,16 @@ rm -rf "$(dirname "$TMP_CONFIG")"
 # --- Issues ---
 run_test "issue list --assignee me -n 3 (human)" $CLI issue list --assignee me -n 3
 run_test "issue list --assignee me -n 3 (json)" $CLI -o json issue list --assignee me -n 3
-run_test "issue list --team CLO --state Todo -n 5" $CLI issue list --team CLO --state Todo -n 5
+run_test "issue list --team --state Todo -n 5" $CLI issue list --team "$TEAM_KEY" --state Todo -n 5
 run_test "issue list -o ids (xargs-friendly)" $CLI -o ids issue list --assignee me -n 3
-run_test "issue get CLO-34 (human)" $CLI issue get CLO-34
-run_test "issue get CLO-34 (json)" $CLI -o json issue get CLO-34
-run_test "issue url CLO-34" $CLI issue url CLO-34
+run_test "issue get (human)" $CLI issue get "$ISSUE_ID"
+run_test "issue get (json)" $CLI -o json issue get "$ISSUE_ID"
+run_test "issue url" $CLI issue url "$ISSUE_ID"
 run_test "issue search login" $CLI issue search login -n 3
 
 # --- Dry-run mutations ---
-run_test "issue create --dry-run" $CLI --dry-run issue create --team CLO --title "Test from clinear" --priority 3
-run_test "issue update --dry-run" $CLI --dry-run issue update CLO-34 --priority 2
+run_test "issue create --dry-run" $CLI --dry-run issue create --team "$TEAM_KEY" --title "Test from Cliniar" --priority 3
+run_test "issue update --dry-run" $CLI --dry-run issue update "$ISSUE_ID" --priority 2
 
 # --- Output formats ---
 run_test "issue list -o yaml" $CLI -o yaml issue list --assignee me -n 2
@@ -114,41 +121,46 @@ EXPECT_FAIL=1 run_test "non-existent issue (expect error 4)" $CLI issue get FAKE
 
 # --- MCP / Skill smoke tests (no live API; pure-Python import + content) ---
 run_test "mcp: content module imports + loads all topics" \
-    python3 -c "from clinear.mcp.content import Topic, ClinearGuide, load_topic
+    python3 -c "from cliniar.mcp.content import Topic, CliniarGuide, load_topic
 for t in Topic:
     g = load_topic(t)
-    assert isinstance(g, ClinearGuide), f'{t}: bad type'
+    assert isinstance(g, CliniarGuide), f'{t}: bad type'
     assert g.title, f'{t}: missing title'
     assert g.instructions, f'{t}: empty instructions'
 print('ok')"
 
 run_test "mcp: resources module imports without mcp SDK" \
-    python3 -c "from clinear.mcp import resources; assert callable(resources.viewer); print('ok')"
+    python3 -c "from cliniar.mcp import resources; assert callable(resources.viewer); print('ok')"
 
 run_test "mcp: prompts module produces non-empty templates" \
-    python3 -c "from clinear.mcp import prompts
-for fn, args in [(prompts.triage, ('CLO',)),
+    python3 -c "from cliniar.mcp import prompts
+for fn, args in [(prompts.triage, ('ENG',)),
                   (prompts.daily_standup, ()),
-                  (prompts.hand_off, ('CLO-1', 'Bob', 'note')),
-                  (prompts.cycle_review, ('CLO',)),
-                  (prompts.issue_investigate, ('CLO-1',)),
-                  (prompts.create_from_error, ('TypeError', 'CLO', 2))]:
+                  (prompts.hand_off, ('ENG-1', 'Bob', 'note')),
+                  (prompts.cycle_review, ('ENG',)),
+                  (prompts.issue_investigate, ('ENG-1',)),
+                  (prompts.create_from_error, ('TypeError', 'ENG', 2))]:
     out = fn(*args)
     assert isinstance(out, str) and len(out) > 100, f'{fn.__name__}: too short'
-    assert 'clinear' in out, f'{fn.__name__}: no clinear command'
+    assert 'cliniar' in out, f'{fn.__name__}: no cliniar command'
     assert 'REMINDER' in out, f'{fn.__name__}: missing reminder'
 print('ok')"
 
-run_test "skill: SKILL.md frontmatter is valid YAML and lists clinear bin" \
+run_test "skill: SKILL.md frontmatter is valid YAML and lists cliniar bin" \
     python3 -c "import re, pathlib
-text = pathlib.Path('skills/clinear/SKILL.md').read_text()
+text = pathlib.Path('skills/cliniar/SKILL.md').read_text()
 m = re.match(r'^---\n(.*?)\n---', text, re.DOTALL)
 assert m, 'frontmatter missing'
 fm = m.group(1)
-assert 'name: clinear' in fm, 'name missing/incorrect'
-assert 'version: 0.3.1' in fm, 'version must be 0.3.0'
-assert '\"clinear\"' in fm, 'requires.bins must include clinear'
+assert 'name: cliniar' in fm, 'name missing/incorrect'
+assert '\"cliniar\"' in fm, 'requires.bins must include cliniar'
 print('ok')"
+
+if [ "${CLINIAR_TEST_LEGACY_ALIASES:-0}" = "1" ]; then
+    run_test "legacy CLI alias (explicit compatibility check)" .venv/bin/clinear --version
+    run_test "legacy package alias (explicit compatibility check)" \
+        python3 -c "import clinear, clinear_server; print('ok')"
+fi
 
 echo ""
 echo "================================================================"

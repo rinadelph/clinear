@@ -1,4 +1,4 @@
-# clinear — Design Document
+# cliniar — Design Document
 
 > Linear CLI built in Python with Pydantic v2 + httpx + Typer
 > Designed for: humans, agents, CI/CD, and shell pipelines
@@ -9,10 +9,10 @@
 
 1. **Type-safe everything.** Every API response is a validated Pydantic model. No `dict[str, Any]` leaks into business logic.
 2. **Agent-first, human-second.** JSON output is the canonical contract. Human-friendly tables are a presentation layer on top.
-3. **Composable.** Every command works in pipelines (`clinear issue list | jq | xargs ...`).
+3. **Composable.** Every command works in pipelines (`cliniar issue list | jq | xargs ...`).
 4. **Idempotent where possible.** Re-running a command shouldn't break state.
 5. **Fast.** Async by default. Concurrent fetches where safe.
-6. **Discoverable.** `clinear --help`, `clinear issue --help`, `clinear issue create --help` should be sufficient.
+6. **Discoverable.** `cliniar --help`, `cliniar issue --help`, `cliniar issue create --help` should be sufficient.
 7. **Honest errors.** Linear API errors surfaced verbatim with context. No silent failures.
 
 ---
@@ -55,7 +55,7 @@ v1 covers the 8 highest-value domains. v2+ expands.
 ## Command Hierarchy
 
 ```
-clinear
+cliniar
 ├── auth                    # Token management
 │   ├── login               # Interactive: prompt for token, validate, store
 │   ├── status              # Show authenticated user
@@ -171,26 +171,26 @@ Linear's GraphQL has powerful filter inputs. We expose them ergonomically:
 
 ```bash
 # Simple flags
-clinear issue list --team ENG --state "In Progress" --assignee me
+cliniar issue list --team ENG --state "In Progress" --assignee me
 
 # Filter by relations
-clinear issue list --project "Q2 Roadmap" --label Bug
+cliniar issue list --project "Q2 Roadmap" --label Bug
 
 # Date filters (ISO 8601 durations supported)
-clinear issue list --updated "-P7D"          # Updated in last 7 days
-clinear issue list --due-before "2026-06-01"
+cliniar issue list --updated "-P7D"          # Updated in last 7 days
+cliniar issue list --due-before "2026-06-01"
 
 # Multiple states (OR)
-clinear issue list --state "Todo,In Progress"
+cliniar issue list --state "Todo,In Progress"
 
 # Negation
-clinear issue list --not-state "Done"
+cliniar issue list --not-state "Done"
 
 # Free-text within structured filter
-clinear issue list --team ENG --contains "auth bug"
+cliniar issue list --team ENG --contains "auth bug"
 
 # Saved views (named filters in config)
-clinear issue list --view "my-open-bugs"
+cliniar issue list --view "my-open-bugs"
 ```
 
 ---
@@ -198,12 +198,12 @@ clinear issue list --view "my-open-bugs"
 ## Config File
 
 Location precedence:
-1. `$CLINEAR_CONFIG` env var
-2. `$XDG_CONFIG_HOME/clinear/config.toml`
-3. `~/.config/clinear/config.toml`
+1. `$CLINIAR_CONFIG` env var
+2. `$XDG_CONFIG_HOME/cliniar/config.toml`
+3. `~/.config/cliniar/config.toml`
 
 ```toml
-# ~/.config/clinear/config.toml
+# ~/.config/cliniar/config.toml
 
 [auth]
 token_env = "LINEAR_TOKEN"  # Read from env, never store plaintext
@@ -236,48 +236,48 @@ todo = "issue list --state Todo --assignee me"
 
 ### Story 1: Quick triage (most common)
 ```bash
-$ clinear me                              # confirm auth
-$ clinear issue list --assignee me        # what's on my plate
-$ clinear issue get ENG-123               # full detail
-$ clinear issue state ENG-123 "In Progress"
-$ clinear issue comment ENG-123 "Starting work on this"
+$ cliniar me                              # confirm auth
+$ cliniar issue list --assignee me        # what's on my plate
+$ cliniar issue get ENG-123               # full detail
+$ cliniar issue state ENG-123 "In Progress"
+$ cliniar issue comment ENG-123 "Starting work on this"
 ```
 
 ### Story 2: Sprint planning
 ```bash
-$ clinear cycle current ENG               # what's the current cycle
-$ clinear cycle issues                    # issues in current cycle
-$ clinear issue list --no-cycle --team ENG --state Todo | head -20
-$ clinear issue update ENG-200 --cycle current
+$ cliniar cycle current ENG               # what's the current cycle
+$ cliniar cycle issues                    # issues in current cycle
+$ cliniar issue list --no-cycle --team ENG --state Todo | head -20
+$ cliniar issue update ENG-200 --cycle current
 ```
 
 ### Story 3: Bulk operations (agents/scripts)
 ```bash
 # Find all stale bugs and assign to me
-$ clinear issue list \
+$ cliniar issue list \
     --label Bug --state Todo --updated "-P30D" \
     -o ids | \
-  xargs -I {} clinear issue update {} --assignee me
+  xargs -I {} cliniar issue update {} --assignee me
 
 # Export to markdown for weekly report
-$ clinear issue list --assignee me --updated "-P7D" \
+$ cliniar issue list --assignee me --updated "-P7D" \
     -o md > weekly-report.md
 ```
 
 ### Story 4: Project status check
 ```bash
-$ clinear project list --state started
-$ clinear project get "Q2 Roadmap"
-$ clinear project issues "Q2 Roadmap" --state "!completed"
+$ cliniar project list --state started
+$ cliniar project get "Q2 Roadmap"
+$ cliniar project issues "Q2 Roadmap" --state "!completed"
 ```
 
 ### Story 5: Agent integration
 ```bash
 # Get JSON for an LLM to process
-$ clinear issue get ENG-123 -o json
+$ cliniar issue get ENG-123 -o json
 
 # Create from agent
-$ clinear issue create \
+$ cliniar issue create \
     --team ENG \
     --title "Auth bug in login flow" \
     --description "$(cat error-report.md)" \
@@ -287,8 +287,8 @@ $ clinear issue create \
 
 ### Story 6: Escape hatch
 ```bash
-# Need a query clinear doesn't expose? Drop to raw GraphQL.
-$ clinear raw query 'query { viewer { id name email } }'
+# Need a query cliniar doesn't expose? Drop to raw GraphQL.
+$ cliniar raw query 'query { viewer { id name email } }'
 ```
 
 ---
@@ -338,7 +338,7 @@ Error format (JSON mode):
 ## Project Structure
 
 ```
-clinear/
+cliniar/
 ├── pyproject.toml          # Modern Python project metadata
 ├── README.md               # Quick start
 ├── LICENSE                 # MIT
@@ -347,9 +347,9 @@ clinear/
 ├── requirements.txt        # Hashed runtime deps
 ├── requirements-dev.txt    # Test/lint deps
 │
-├── clinear/                # Package root
+├── cliniar/                # Package root
 │   ├── __init__.py         # Version, entry point
-│   ├── __main__.py         # python -m clinear
+│   ├── __main__.py         # python -m cliniar
 │   ├── cli.py              # Typer app, global flags, root command
 │   ├── config.py           # Config loading/validation
 │   ├── client.py           # Async GraphQL client
@@ -415,14 +415,14 @@ clinear/
 
 ## v1 Acceptance Criteria
 
-- [ ] `clinear me` returns viewer info
-- [ ] `clinear team list` works
-- [ ] `clinear issue list` with `--team`, `--state`, `--assignee`, `--label` filters
-- [ ] `clinear issue get <id>` shows full issue detail
-- [ ] `clinear issue create` with all common flags
-- [ ] `clinear issue update <id>` for state/assignee/priority/labels
-- [ ] `clinear cycle current` returns current cycle for a team
-- [ ] `clinear project list` and `project get`
+- [ ] `cliniar me` returns viewer info
+- [ ] `cliniar team list` works
+- [ ] `cliniar issue list` with `--team`, `--state`, `--assignee`, `--label` filters
+- [ ] `cliniar issue get <id>` shows full issue detail
+- [ ] `cliniar issue create` with all common flags
+- [ ] `cliniar issue update <id>` for state/assignee/priority/labels
+- [ ] `cliniar cycle current` returns current cycle for a team
+- [ ] `cliniar project list` and `project get`
 - [ ] Output formats: human, json, ids, plain
 - [ ] `--dry-run` shows mutation without executing
 - [ ] All commands validated against Pydantic models

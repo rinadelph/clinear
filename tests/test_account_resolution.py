@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from clinear.config import (
+from cliniar.config import (
     AccountConfig,
     Config,
     DefaultsConfig,
@@ -17,9 +17,8 @@ from clinear.config import (
     resolve_token,
     team_key_from_hint,
 )
-from clinear.errors import AuthError
-from clinear.models.workflow import WorkflowState, WorkflowStateType
-
+from cliniar.errors import AuthError
+from cliniar.models.workflow import WorkflowState, WorkflowStateType
 
 # ----------------- team_key_from_hint -----------------
 

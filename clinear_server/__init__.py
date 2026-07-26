@@ -1,11 +1,16 @@
-"""clinear_server — local, Linear-API-compatible GraphQL backend for the clinear CLI.
+"""Compatibility package for the renamed :mod:`cliniar_server` package."""
 
-Wire-compatible with the ~25 Linear GraphQL operations clinear actually sends.
-Offline-first (SQLite per tenant), multi-tenant by token, no rate limits.
-"""
-from pathlib import Path
+from importlib import import_module
+from typing import Any
 
-try:
-    __version__ = (Path(__file__).resolve().parent.parent / "VERSION").read_text().strip()
-except Exception:  # pragma: no cover
-    __version__ = "0.0.0"
+_impl = import_module("cliniar_server")
+
+# Server submodules are represented by tiny lazy shim files in this package.
+# This keeps base imports optional-dependency-safe while ensuring normal legacy
+# imports replace themselves with the canonical module object.
+
+__version__ = _impl.__version__
+
+
+def __getattr__(name: str) -> Any:
+    return getattr(_impl, name)
