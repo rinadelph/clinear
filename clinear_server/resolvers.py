@@ -11,12 +11,9 @@ from ariadne import (
     MutationType,
     ObjectType,
     QueryType,
+    ScalarType,
     make_executable_schema,
 )
-from ariadne import ScalarType
-
-from clinear_server.store import Store
-from clinear_server.writer import Writer
 
 query = QueryType()
 mutation = MutationType()
@@ -26,6 +23,9 @@ Team = ObjectType("Team")
 Issue = ObjectType("Issue")
 Project = ObjectType("Project")
 Comment = ObjectType("Comment")
+WorkflowState = ObjectType("WorkflowState")
+Cycle = ObjectType("Cycle")
+Attachment = ObjectType("Attachment")
 
 datetime_scalar = ScalarType("DateTime")
 timeless_scalar = ScalarType("TimelessDate")
@@ -90,7 +90,7 @@ def r_team(_, info, id):
 
 
 @query.field("issues")
-def r_issues(_, info, filter=None, first=50, after=None, orderBy="updatedAt"):
+def r_issues(_, info, filter=None, first=50, after=None, orderBy="updatedAt"):  # noqa: N803
     store, _w, org, uid = _ctx(info)
     nodes = store.issues(org, uid, filter, order_by=orderBy or "updatedAt")
     return _conn(nodes[:first])
@@ -112,6 +112,18 @@ def r_projects(_, info, filter=None, first=50, after=None):
 def r_project(_, info, id):
     store, _w, org, _uid = _ctx(info)
     return store.project_by_id(org, id)
+
+
+@query.field("workflowStates")
+def r_workflow_states(_, info, filter=None, first=100, after=None):
+    store, _w, org, _uid = _ctx(info)
+    return _conn(store.workflow_states(org, filter)[:first])
+
+
+@query.field("cycles")
+def r_cycles(_, info, filter=None, first=100, after=None):
+    store, _w, org, _uid = _ctx(info)
+    return _conn(store.cycles(org, filter)[:first])
 
 
 @query.field("issueLabels")
@@ -172,6 +184,17 @@ def t_active_cycle(obj, info):
     return next((c for c in cycles if c["id"] == cid), None)
 
 
+# ----------------------------------------------------------------- State/cycle fields
+@WorkflowState.field("team")
+@Cycle.field("team")
+def reference_team(obj, info):
+    store, _w, org, _uid = _ctx(info)
+    tid = obj.get("_team_id")
+    if not tid:
+        return None
+    return store.ser_team(store.raw_team(org, tid))
+
+
 # ----------------------------------------------------------------- Issue fields
 @Issue.field("state")
 def i_state(obj, info):
@@ -214,8 +237,9 @@ def i_cycle(obj, info):
     if not obj.get("_cycle_id"):
         return None
     with store.engine.connect() as conn:
+        from sqlalchemy import and_, select
+
         from clinear_server.db import cycle as cyc
-        from sqlalchemy import select, and_
         r = conn.execute(select(cyc).where(and_(cyc.c.organization_id == org, cyc.c.id == obj["_cycle_id"]))).first()
         return store.ser_cycle(dict(r._mapping)) if r else None
 
@@ -261,6 +285,12 @@ def p_creator(obj, info):
 def p_members(obj, info, first=100):
     store, _w, org, _uid = _ctx(info)
     return _conn(store.project_members(org, obj["id"])[:first])
+
+
+@Project.field("teams")
+def p_teams(obj, info, first=100):
+    store, _w, org, _uid = _ctx(info)
+    return _conn(store.project_teams(org, obj["id"])[:first])
 
 
 # ----------------------------------------------------------------- Comment fields
@@ -330,7 +360,7 @@ def m_label_create(_, info, input):
     store, w, org, _uid = _ctx(info)
     lid = w.label_create(org, input)
     labels = store.labels(org)
-    node = next((l for l in labels if l["id"] == lid), None)
+    node = next((label for label in labels if label["id"] == lid), None)
     return {"success": bool(lid), "issueLabel": node}
 
 
@@ -360,8 +390,22 @@ def m_project_archive(_, info, id):
     return {"success": w.project_archive(org, id)}
 
 
+@mutation.field("attachmentCreate")
+def m_attachment_create(_, info, input):
+    _store, w, org, uid = _ctx(info)
+    created = w.attachment_create(org, uid, input)
+    return {"success": bool(created), "attachment": created}
+
+
+@Attachment.field("issue")
+def a_issue(obj, info):
+    store, _w, org, _uid = _ctx(info)
+    return store.issue_by_id_or_identifier(org, obj["_issue_id"])
+
+
 def _get_comment(store, org, cid):
-    from sqlalchemy import select, and_
+    from sqlalchemy import and_, select
+
     from clinear_server.db import comment as cmt
     with store.engine.connect() as conn:
         r = conn.execute(select(cmt).where(and_(cmt.c.organization_id == org, cmt.c.id == cid))).first()
@@ -373,5 +417,6 @@ def build_schema():
     sdl = (Path(__file__).parent / "schema.graphql").read_text()
     return make_executable_schema(
         sdl, query, mutation, Team, Issue, Project, Comment,
+        WorkflowState, Cycle, Attachment,
         datetime_scalar, timeless_scalar, json_scalar,
     )

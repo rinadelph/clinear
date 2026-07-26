@@ -1,12 +1,15 @@
 """Write operations with transactional identifiers and derived fields."""
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 from graphql import GraphQLError
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.engine import Engine
 
 from clinear_server.db import (
     PRIORITY_LABELS,
+    attachment,
     comment,
     cycle,
     entity_url,
@@ -305,6 +308,45 @@ class Writer:
 
     def comment_delete(self, org_id: str, cid: str) -> bool:
         return self._soft_delete(comment, org_id, cid)
+
+    # -------------------------------------------------------------- attachments
+    def attachment_create(self, org_id: str, viewer_id: str, inp: dict) -> dict | None:
+        with self.engine.begin() as conn:
+            parsed_url = urlparse(inp["url"])
+            if (
+                parsed_url.scheme not in {"http", "https"}
+                or not parsed_url.netloc
+                or parsed_url.username
+                or parsed_url.password
+            ):
+                raise InvalidReferenceError("url")
+            irow = conn.execute(select(issue.c.id).where(and_(
+                issue.c.organization_id == org_id,
+                (issue.c.id == inp["issueId"])
+                | (issue.c.identifier == str(inp["issueId"]).upper()),
+            ))).first()
+            if not irow:
+                return None
+            aid = new_id()
+            created_at = now_iso()
+            conn.execute(attachment.insert().values(
+                id=aid,
+                organization_id=org_id,
+                issue_id=irow[0],
+                creator_id=viewer_id,
+                url=inp["url"],
+                title=inp["title"],
+                subtitle=inp.get("subtitle"),
+                created_at=created_at,
+            ))
+            return {
+                "id": aid,
+                "url": inp["url"],
+                "title": inp["title"],
+                "subtitle": inp.get("subtitle"),
+                "createdAt": created_at,
+                "_issue_id": irow[0],
+            }
 
     # -------------------------------------------------------------- labels
     def label_create(self, org_id: str, inp: dict) -> str | None:

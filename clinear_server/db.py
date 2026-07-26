@@ -29,7 +29,7 @@ from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import IntegrityError
 
 metadata = MetaData()
-CURRENT_SCHEMA_REVISION = 3
+CURRENT_SCHEMA_REVISION = 4
 
 
 def now_iso() -> str:
@@ -206,6 +206,18 @@ comment = Table(
     Column("archived_at", String),
 )
 
+attachment = Table(
+    "attachment", metadata,
+    Column("id", String, primary_key=True),
+    Column("organization_id", String, ForeignKey("organization.id"), index=True),
+    Column("issue_id", String, ForeignKey("issue.id"), index=True),
+    Column("creator_id", String, ForeignKey("user.id")),
+    Column("url", String, nullable=False),
+    Column("title", String, nullable=False),
+    Column("subtitle", String),
+    Column("created_at", String),
+)
+
 project = Table(
     "project", metadata,
     Column("id", String, primary_key=True),
@@ -359,6 +371,7 @@ _MIGRATIONS = {
     1: lambda _conn: None,
     2: _apply_token_hash_uniqueness,
     3: lambda conn: project_team.create(conn, checkfirst=True),
+    4: lambda conn: attachment.create(conn, checkfirst=True),
 }
 
 

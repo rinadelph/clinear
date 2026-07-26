@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -17,6 +19,7 @@ from clinear_server.db import (
     CURRENT_SCHEMA_REVISION,
     api_key,
     applied_schema_revision,
+    attachment,
     cycle,
     display_database_target,
     issue,
@@ -101,12 +104,14 @@ def test_migrate_upgrades_a_recorded_prior_schema(tmp_path) -> None:
     engine = make_engine(tmp_path / "prior-schema.db")
     metadata.create_all(engine)
     with engine.begin() as conn:
+        attachment.drop(conn)
         project_team.drop(conn)
         conn.execute(schema_revision.insert().values(revision=1, applied_at=now_iso()))
 
     migrate(engine)
 
     assert applied_schema_revision(engine) == CURRENT_SCHEMA_REVISION
+    assert inspect(engine).has_table(attachment.name)
     assert inspect(engine).has_table(project_team.name)
     indexes = inspect(engine).get_indexes(api_key.name)
     assert any(
@@ -119,6 +124,7 @@ def test_migrate_rejects_unsafe_duplicate_legacy_tokens(tmp_path) -> None:
     engine = make_engine(tmp_path / "duplicate-legacy-token.db")
     metadata.create_all(engine)
     with engine.begin() as conn:
+        attachment.drop(conn)
         project_team.drop(conn)
         conn.execute(schema_revision.insert().values(revision=1, applied_at=now_iso()))
     seeded = _seed(engine, name="Alpha", key="alpha", email="alpha@example.test")
@@ -287,6 +293,113 @@ def test_issue_references_cannot_cross_organization_boundaries(tmp_path) -> None
         ).scalar_one()
     assert counter == 1
     assert title == "Alpha issue"
+    assert writer.attachment_create(
+        alpha["org_id"],
+        alpha["user_id"],
+        {
+            "issueId": beta_parent,
+            "url": "https://example.test/foreign",
+            "title": "Foreign issue",
+        },
+    ) is None
+    with pytest.raises(InvalidReferenceError) as unsafe_url:
+        writer.attachment_create(
+            alpha["org_id"],
+            alpha["user_id"],
+            {
+                "issueId": alpha_issue,
+                "url": "javascript:alert(1)",
+                "title": "Unsafe URL",
+            },
+        )
+    assert unsafe_url.value.extensions["field"] == "url"
+
+
+def test_cycle_and_boolean_issue_filters_do_not_broaden_results(tmp_path) -> None:
+    engine = make_engine(tmp_path / "cycle-filters.db")
+    migrate(engine)
+    seeded = _seed(engine, name="Filters", key="filters", email="filters@example.test")
+    writer = Writer(engine)
+    with engine.begin() as conn:
+        current_cycle = new_id()
+        next_cycle = new_id()
+        for cycle_id, number, name in (
+            (current_cycle, 1, "Current Cycle"),
+            (next_cycle, 2, "Next Cycle"),
+        ):
+            conn.execute(
+                cycle.insert().values(
+                    id=cycle_id,
+                    organization_id=seeded["org_id"],
+                    team_id=seeded["team_id"],
+                    number=number,
+                    name=name,
+                    created_at=now_iso(),
+                    updated_at=now_iso(),
+                )
+            )
+        conn.execute(
+            team.update()
+            .where(team.c.id == seeded["team_id"])
+            .values(active_cycle_id=current_cycle)
+        )
+    writer.issue_create(
+        seeded["org_id"],
+        seeded["user_id"],
+        {
+            "teamId": seeded["team_id"],
+            "title": "Current urgent",
+            "cycleId": current_cycle,
+            "priority": 1,
+        },
+    )
+    writer.issue_create(
+        seeded["org_id"],
+        seeded["user_id"],
+        {
+            "teamId": seeded["team_id"],
+            "title": "Next low",
+            "cycleId": next_cycle,
+            "priority": 4,
+        },
+    )
+    store = Store(engine)
+
+    current = store.issues(
+        seeded["org_id"],
+        seeded["user_id"],
+        {"cycle": {"isActive": {"eq": True}}},
+    )
+    upcoming = store.issues(
+        seeded["org_id"],
+        seeded["user_id"],
+        {"cycle": {"isNext": {"eq": True}}},
+    )
+    combined = store.issues(
+        seeded["org_id"],
+        seeded["user_id"],
+        {
+            "and": [
+                {"title": {"contains": "Current"}},
+                {"priority": {"eq": 1}},
+            ]
+        },
+    )
+    alternatives = store.issues(
+        seeded["org_id"],
+        seeded["user_id"],
+        {
+            "or": [
+                {"title": {"eq": "Current urgent"}},
+                {"title": {"eq": "Next low"}},
+            ]
+        },
+    )
+
+    assert [row["title"] for row in current] == ["Current urgent"]
+    assert [row["title"] for row in upcoming] == ["Next low"]
+    assert [row["title"] for row in combined] == ["Current urgent"]
+    assert {row["title"] for row in alternatives} == {"Current urgent", "Next low"}
 
 
 def test_project_and_label_references_are_organization_scoped(tmp_path) -> None:
@@ -474,3 +587,176 @@ def test_health_stays_available_when_schema_is_unmigrated(tmp_path) -> None:
     assert health.status_code == 200
     assert ready.status_code == 503
     assert ready.json() == {"status": "unavailable", "reason": "schema_outdated"}
+
+
+def test_cloverops_graphql_operation_contract(tmp_path) -> None:
+    target = os.environ.get("CLINEAR_TEST_POSTGRES_URL") or (
+        tmp_path / "cloverops-contract.db"
+    )
+    suffix = uuid.uuid4().hex[:12]
+    contract_token = f"clinear_test_cloverops_contract_{suffix}"
+    engine = make_engine(target)
+    migrate(engine)
+    seeded = seed_tenant(
+        engine,
+        org_name="Contract Organization",
+        org_url_key=f"contract-{suffix}",
+        team_key="ENG",
+        user_name="Contract User",
+        user_email="contract@example.test",
+        token=contract_token,
+        demo_issues=False,
+    )
+    writer = Writer(engine)
+    project_id = writer.project_create(
+        seeded["org_id"],
+        seeded["user_id"],
+        {"name": "Contract Project", "teamIds": [seeded["team_id"]]},
+    )
+    issue_id = writer.issue_create(
+        seeded["org_id"],
+        seeded["user_id"],
+        {
+            "teamId": seeded["team_id"],
+            "title": "Contract issue",
+            "projectId": project_id,
+        },
+    )
+    with engine.begin() as conn:
+        cycle_id = new_id()
+        conn.execute(
+            cycle.insert().values(
+                id=cycle_id,
+                organization_id=seeded["org_id"],
+                team_id=seeded["team_id"],
+                number=1,
+                name="Contract Cycle",
+                created_at=now_iso(),
+                updated_at=now_iso(),
+            )
+        )
+    engine.dispose()
+
+    app = create_app(database_url=str(target), open_mode=False)
+    headers = {"Authorization": contract_token}
+
+    def execute(client, query: str, variables: dict | None = None) -> dict:
+        response = client.post(
+            "/graphql",
+            headers=headers,
+            json={"query": query, "variables": variables or {}},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert "errors" not in payload, payload.get("errors")
+        return payload["data"]
+
+    with TestClient(app) as client:
+        bootstrap = execute(
+            client,
+            """query Bootstrap($first: Int!) {
+              t: teams { nodes { id name key description icon color } }
+              p: projects(first: $first) { nodes {
+                id name slugId description icon color state progress startDate targetDate
+                lead { id name } teams { nodes { id name key } } health url
+              } }
+              s: workflowStates { nodes {
+                id name type color description position team { id key }
+              } }
+            }""",
+            {"first": 100},
+        )
+        assert bootstrap["t"]["nodes"][0]["key"] == "ENG"
+        assert bootstrap["p"]["nodes"][0]["teams"]["nodes"][0]["key"] == "ENG"
+        assert bootstrap["s"]["nodes"][0]["team"]["key"] == "ENG"
+
+        cycles_data = execute(
+            client,
+            """query ListCycles($filter: CycleFilter) {
+              cycles(filter: $filter) {
+                nodes { id name number startsAt endsAt progress team { id key } }
+              }
+            }""",
+            {"filter": {"team": {"id": {"eq": seeded["team_id"]}}}},
+        )
+        assert cycles_data["cycles"]["nodes"][0]["id"] == cycle_id
+        assert cycles_data["cycles"]["nodes"][0]["team"]["key"] == "ENG"
+
+        issues_data = execute(
+            client,
+            """query FindIssue($filter: IssueFilter!) {
+              issues(filter: $filter) { nodes { id } }
+            }""",
+            {"filter": {"identifier": {"eq": "ENG-1"}}},
+        )
+        assert issues_data["issues"]["nodes"][0]["id"] == issue_id
+
+        create_data = execute(
+            client,
+            """mutation CreateIssue($input: IssueCreateInput!) {
+              issueCreate(input: $input) {
+                success issue {
+                  id identifier title state { name type color }
+                  priority team { id key } url
+                }
+              }
+            }""",
+            {
+                "input": {
+                    "teamId": seeded["team_id"],
+                    "title": "Created by CloverOps",
+                    "projectId": project_id,
+                    "priority": 2,
+                }
+            },
+        )
+        created_id = create_data["issueCreate"]["issue"]["id"]
+        assert create_data["issueCreate"]["success"] is True
+
+        states_data = execute(
+            client,
+            """query GetStartedStates {
+              workflowStates(filter: { type: { eq: "started" } }) {
+                nodes { id name }
+              }
+            }""",
+        )
+        started_id = states_data["workflowStates"]["nodes"][0]["id"]
+        execute(
+            client,
+            """mutation MoveIssue($id: String!, $sid: String!) {
+              issueUpdate(id: $id, input: { stateId: $sid }) { success }
+            }""",
+            {"id": created_id, "sid": started_id},
+        )
+        execute(
+            client,
+            """mutation Comment($iid: String!, $b: String!) {
+              commentCreate(input: {issueId: $iid, body: $b}) { success }
+            }""",
+            {"iid": created_id, "b": "Contract comment"},
+        )
+        attachment_data = execute(
+            client,
+            """mutation Attach(
+              $iid: String!, $url: String!, $t: String!, $st: String
+            ) {
+              attachmentCreate(input: {
+                issueId: $iid, url: $url, title: $t, subtitle: $st
+              }) { success }
+            }""",
+            {
+                "iid": created_id,
+                "url": "https://example.test/change/1",
+                "t": "Contract attachment",
+                "st": "Created by the contract test",
+            },
+        )
+        assert attachment_data["attachmentCreate"]["success"] is True
+
+    verification_engine = make_engine(target)
+    with verification_engine.connect() as conn:
+        assert conn.execute(
+            select(attachment.c.id).where(attachment.c.issue_id == created_id)
+        ).scalar_one()
+    verification_engine.dispose()

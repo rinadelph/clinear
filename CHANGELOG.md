@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **`clinear-serve` — a local, self-hosted, Linear-API-compatible backend**
   (new optional `clinear_server` package; install with `pip install 'clinear[server]'`).
-  Speaks the exact GraphQL subset clinear sends (13 queries + 12 mutations), so
+  Speaks the GraphQL subset used by clinear and compatible consumers, so
   the CLI runs fully **offline** against a single-file SQLite database with **no
   rate limits**.
   - `clinear-serve seed` provisions a tenant (org, admin user, team, seeded
@@ -40,6 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Mutation references are validated against the authenticated organization
     and compatible team before writes, including states, assignees, projects,
     cycles, parents, labels, project leads, and project-team relationships.
+  - CloverOps compatibility includes batched bootstrap aliases, top-level
+    workflow-state/cycle filters, project teams/health, issue identifier lookup,
+    state transitions, comments, and persisted URL attachments.
   - `$CLINEAR_APP_URL` configures generated issue/project links for owned hosted
     deployments (local default `http://localhost:8787`), and `/ready` verifies
     database connectivity plus schema currency separately from `/health`.

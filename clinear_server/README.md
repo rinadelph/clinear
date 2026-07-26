@@ -64,11 +64,12 @@ first user in a shared or ambiguous database.
 ## What it implements
 
 **Queries:** `viewer`, `teams`, `team` (+ `states`/`members`/`cycles`/`activeCycle`),
-`issues` (with `IssueFilter` + `orderBy`), `issue` (+ `comments`/`labels`/`subscribers`),
-`projects`, `project`, `issueLabels`, `searchIssues`, `rateLimitStatus`.
+top-level `workflowStates`/`cycles`, `issues` (with `IssueFilter` + `orderBy`),
+`issue` (+ `comments`/`labels`/`subscribers`), `projects`, `project`,
+`issueLabels`, `searchIssues`, `rateLimitStatus`.
 
 **Mutations:** `issueCreate/Update/Delete/Archive`, `commentCreate/Update/Delete`,
-`issueLabelCreate/Delete`, `projectCreate/Update/Archive`.
+`issueLabelCreate/Delete`, `projectCreate/Update/Archive`, `attachmentCreate`.
 
 **Semantics:** per-team incrementing identifiers (`ENG-1`, `ENG-2`, …), seeded
 workflow states (Backlog/Todo/In Progress/In Review/Done/Canceled), derived

@@ -13,6 +13,8 @@ type Query {
   issue(id: String!): Issue
   projects(filter: ProjectFilter, first: Int = 50, after: String): ProjectConnection
   project(id: String!): Project
+  workflowStates(filter: WorkflowStateFilter, first: Int = 100, after: String): WorkflowStateConnection
+  cycles(filter: CycleFilter, first: Int = 100, after: String): CycleConnection
   issueLabels(filter: IssueLabelFilter, first: Int = 100, after: String): IssueLabelConnection
   searchIssues(term: String!, first: Int = 20): IssueConnection
   rateLimitStatus: RateLimitPayload
@@ -31,6 +33,7 @@ type Mutation {
   projectCreate(input: ProjectCreateInput!): ProjectPayload
   projectUpdate(id: String!, input: ProjectUpdateInput!): ProjectPayload
   projectArchive(id: String!): DeletePayload
+  attachmentCreate(input: AttachmentCreateInput!): AttachmentPayload
 }
 
 enum PaginationOrderBy { createdAt updatedAt }
@@ -85,6 +88,7 @@ type WorkflowState {
   type: String!
   createdAt: DateTime
   updatedAt: DateTime
+  team: Team
 }
 
 type IssueLabel {
@@ -106,6 +110,7 @@ type Cycle {
   progress: Float
   createdAt: DateTime
   updatedAt: DateTime
+  team: Team
 }
 
 type Project {
@@ -123,6 +128,8 @@ type Project {
   lead: User
   creator: User
   members(first: Int = 100): UserConnection
+  teams(first: Int = 100): TeamConnection
+  health: String
   createdAt: DateTime
   updatedAt: DateTime
 }
@@ -180,6 +187,15 @@ type CommentPayload { success: Boolean! comment: Comment }
 type IssueLabelPayload { success: Boolean! issueLabel: IssueLabel }
 type ProjectPayload { success: Boolean! project: Project }
 type DeletePayload { success: Boolean! }
+type AttachmentPayload { success: Boolean! attachment: Attachment }
+type Attachment {
+  id: ID!
+  url: String!
+  title: String!
+  subtitle: String
+  issue: Issue
+  createdAt: DateTime
+}
 
 type RateLimitPayload {
   identifier: String
@@ -207,12 +223,13 @@ input BooleanComparator { eq: Boolean neq: Boolean }
 
 input TeamFilter { key: StringComparator id: IDComparator name: StringComparator }
 input UserFilter { id: IDComparator email: StringComparator displayName: StringComparator name: StringComparator }
-input WorkflowStateFilter { name: StringComparator type: StringComparator }
-input CycleFilter { id: IDComparator name: StringComparator isActive: BooleanComparator isNext: BooleanComparator }
+input WorkflowStateFilter { name: StringComparator type: StringComparator team: TeamFilter }
+input CycleFilter { id: IDComparator name: StringComparator team: TeamFilter isActive: BooleanComparator isNext: BooleanComparator }
 input ProjectRelFilter { id: IDComparator name: StringComparator }
 input LabelRelFilter { name: StringComparator }
 
 input IssueFilter {
+  identifier: StringComparator
   team: TeamFilter
   state: WorkflowStateFilter
   assignee: UserFilter
@@ -267,3 +284,4 @@ input CommentUpdateInput { body: String }
 input IssueLabelCreateInput { name: String! teamId: String color: String description: String }
 input ProjectCreateInput { name: String! description: String teamIds: [String!] leadId: String state: String color: String icon: String startDate: TimelessDate targetDate: TimelessDate }
 input ProjectUpdateInput { name: String description: String leadId: String state: String color: String icon: String startDate: TimelessDate targetDate: TimelessDate }
+input AttachmentCreateInput { issueId: String! url: String! title: String! subtitle: String }

@@ -19,6 +19,7 @@ from clinear_server.db import (
     issue_subscriber,
     project,
     project_member,
+    project_team,
     team,
     team_member,
     token_hash,
@@ -87,7 +88,7 @@ class Store:
             "id": row["id"], "name": row["name"], "color": row.get("color"),
             "description": row.get("description"), "position": row.get("position"),
             "type": row["type"], "createdAt": row.get("created_at"),
-            "updatedAt": row.get("updated_at"),
+            "updatedAt": row.get("updated_at"), "_team_id": row.get("team_id"),
         }
 
     def ser_team(self, row: dict | None) -> dict | None:
@@ -118,6 +119,7 @@ class Store:
             "startsAt": row.get("starts_at"), "endsAt": row.get("ends_at"),
             "completedAt": row.get("completed_at"), "progress": row.get("progress"),
             "createdAt": row.get("created_at"), "updatedAt": row.get("updated_at"),
+            "_team_id": row.get("team_id"),
         }
 
     def ser_project(self, row: dict | None) -> dict | None:
@@ -194,6 +196,31 @@ class Store:
                 workflow_state.c.archived_at.is_(None))).order_by(workflow_state.c.position)
             return [self.ser_state(r) for r in _conn_rows(conn, stmt)]
 
+    def workflow_states(self, org_id: str, flt: dict | None = None) -> list[dict]:
+        with self.engine.connect() as conn:
+            stmt = select(workflow_state).where(and_(
+                workflow_state.c.organization_id == org_id,
+                workflow_state.c.archived_at.is_(None),
+            ))
+            if flt:
+                if "team" in flt:
+                    team_ids = _resolve_team_ids(conn, org_id, flt["team"])
+                    stmt = stmt.where(
+                        workflow_state.c.team_id.in_(team_ids or ["__none__"])
+                    )
+                for field, column in (
+                    ("type", workflow_state.c.type),
+                    ("name", workflow_state.c.name),
+                ):
+                    if field in flt:
+                        clause = _apply_str_cmp(column, flt[field])
+                        if clause is not None:
+                            stmt = stmt.where(clause)
+            return [
+                self.ser_state(r)
+                for r in _conn_rows(conn, stmt.order_by(workflow_state.c.position))
+            ]
+
     def team_members(self, org_id: str, team_id: str) -> list[dict]:
         with self.engine.connect() as conn:
             stmt = select(user).select_from(
@@ -206,6 +233,26 @@ class Store:
             stmt = select(cycle).where(and_(
                 cycle.c.organization_id == org_id, cycle.c.team_id == team_id)).order_by(cycle.c.number)
             return [self.ser_cycle(r) for r in _conn_rows(conn, stmt)]
+
+    def cycles(self, org_id: str, flt: dict | None = None) -> list[dict]:
+        with self.engine.connect() as conn:
+            stmt = select(cycle).where(cycle.c.organization_id == org_id)
+            if flt:
+                if "team" in flt:
+                    team_ids = _resolve_team_ids(conn, org_id, flt["team"])
+                    stmt = stmt.where(cycle.c.team_id.in_(team_ids or ["__none__"]))
+                for field, column in (("id", cycle.c.id), ("name", cycle.c.name)):
+                    if field in flt:
+                        clause = _apply_str_cmp(column, flt[field])
+                        if clause is not None:
+                            stmt = stmt.where(clause)
+                cycle_ids = _resolve_cycle_ids(conn, org_id, flt)
+                if cycle_ids is not None:
+                    stmt = stmt.where(cycle.c.id.in_(cycle_ids or ["__none__"]))
+            return [
+                self.ser_cycle(r)
+                for r in _conn_rows(conn, stmt.order_by(cycle.c.number))
+            ]
 
     def issue_by_id_or_identifier(self, org_id: str, ident: str) -> dict | None:
         with self.engine.connect() as conn:
@@ -264,6 +311,17 @@ class Store:
                 user.join(project_member, project_member.c.user_id == user.c.id)
             ).where(and_(project_member.c.project_id == project_id, user.c.organization_id == org_id))
             return [self.ser_user(r) for r in _conn_rows(conn, stmt)]
+
+    def project_teams(self, org_id: str, project_id: str) -> list[dict]:
+        with self.engine.connect() as conn:
+            stmt = select(team).select_from(
+                team.join(project_team, project_team.c.team_id == team.c.id)
+            ).where(and_(
+                project_team.c.project_id == project_id,
+                team.c.organization_id == org_id,
+                team.c.archived_at.is_(None),
+            ))
+            return [self.ser_team(r) for r in _conn_rows(conn, stmt)]
 
     def state_by_id(self, org_id: str, sid: str) -> dict | None:
         with self.engine.connect() as conn:
@@ -381,6 +439,10 @@ def _resolve_team_ids(conn, org_id: str, cmp: dict) -> list[str]:
         ic = _apply_str_cmp(team.c.id, cmp["id"])
         if ic is not None:
             stmt = stmt.where(ic)
+    if "name" in cmp:
+        nc = _apply_str_cmp(team.c.name, cmp["name"])
+        if nc is not None:
+            stmt = stmt.where(nc)
     return [r[0] for r in conn.execute(stmt)]
 
 
@@ -394,6 +456,9 @@ def _resolve_state_ids(conn, org_id: str, cmp: dict) -> list[str]:
         c = _apply_str_cmp(workflow_state.c.type, cmp["type"])
         if c is not None:
             stmt = stmt.where(c)
+    if "team" in cmp:
+        team_ids = _resolve_team_ids(conn, org_id, cmp["team"])
+        stmt = stmt.where(workflow_state.c.team_id.in_(team_ids or ["__none__"]))
     return [r[0] for r in conn.execute(stmt)]
 
 
@@ -412,6 +477,58 @@ def _resolve_user_ids(conn, org_id: str, cmp: dict) -> list[str]:
         if c is not None:
             stmt = stmt.where(c)
     return [r[0] for r in conn.execute(stmt)]
+
+
+def _resolve_cycle_ids(conn, org_id: str, cmp: dict) -> list[str] | None:
+    """Resolve active/next cycle booleans; return None when neither is requested."""
+    requested = {"isActive", "isNext"}.intersection(cmp)
+    if not requested:
+        return None
+    all_ids = set(
+        conn.execute(
+            select(cycle.c.id).where(cycle.c.organization_id == org_id)
+        ).scalars()
+    )
+    matches: set[str] | None = None
+    team_rows = conn.execute(
+        select(team.c.id, team.c.active_cycle_id).where(
+            team.c.organization_id == org_id
+        )
+    ).all()
+    for field in requested:
+        positive: set[str] = set()
+        if field == "isActive":
+            positive = {row[1] for row in team_rows if row[1]}
+        else:
+            for team_id, active_cycle_id in team_rows:
+                rows = conn.execute(
+                    select(cycle.c.id)
+                    .where(
+                        and_(
+                            cycle.c.organization_id == org_id,
+                            cycle.c.team_id == team_id,
+                        )
+                    )
+                    .order_by(cycle.c.number)
+                ).scalars().all()
+                if not rows:
+                    continue
+                if active_cycle_id in rows:
+                    index = rows.index(active_cycle_id) + 1
+                    if index < len(rows):
+                        positive.add(rows[index])
+                elif not active_cycle_id:
+                    positive.add(rows[0])
+        comparator = cmp[field] or {}
+        if "eq" in comparator:
+            expected = bool(comparator["eq"])
+        elif "neq" in comparator:
+            expected = not bool(comparator["neq"])
+        else:
+            continue
+        field_matches = positive if expected else all_ids - positive
+        matches = field_matches if matches is None else matches.intersection(field_matches)
+    return sorted(matches or [])
 
 
 def _apply_issue_filter(conn, stmt, org_id, viewer_id, flt: dict | None):
@@ -439,12 +556,29 @@ def _apply_issue_filter(conn, stmt, org_id, viewer_id, flt: dict | None):
             if nc is not None:
                 sub = sub.where(nc)
             stmt = stmt.where(issue.c.project_id.in_([r[0] for r in conn.execute(sub)] or ["__none__"]))
+    if "cycle" in flt:
+        cycle_filter = flt["cycle"]
+        sub = select(cycle.c.id).where(cycle.c.organization_id == org_id)
+        for field, column in (("id", cycle.c.id), ("name", cycle.c.name)):
+            if field in cycle_filter:
+                clause = _apply_str_cmp(column, cycle_filter[field])
+                if clause is not None:
+                    sub = sub.where(clause)
+        cycle_ids = {row[0] for row in conn.execute(sub)}
+        boolean_ids = _resolve_cycle_ids(conn, org_id, cycle_filter)
+        if boolean_ids is not None:
+            cycle_ids.intersection_update(boolean_ids)
+        stmt = stmt.where(issue.c.cycle_id.in_(cycle_ids or ["__none__"]))
     if "priority" in flt:
         c = _apply_num_cmp(issue.c.priority, flt["priority"])
         if c is not None:
             stmt = stmt.where(c)
     if "number" in flt:
         c = _apply_num_cmp(issue.c.number, flt["number"])
+        if c is not None:
+            stmt = stmt.where(c)
+    if "identifier" in flt:
+        c = _apply_str_cmp(issue.c.identifier, flt["identifier"])
         if c is not None:
             stmt = stmt.where(c)
     if "title" in flt:
@@ -469,17 +603,18 @@ def _apply_issue_filter(conn, stmt, org_id, viewer_id, flt: dict | None):
         if nc is not None:
             sub = sub.where(nc)
         stmt = stmt.where(issue.c.id.in_([r[0] for r in conn.execute(sub)] or ["__none__"]))
-    if "or" in flt:
-        ors = []
-        for sub in flt["or"]:
-            if "title" in sub:
-                c = _apply_str_cmp(issue.c.title, sub["title"])
-                if c is not None:
-                    ors.append(c)
-            if "description" in sub:
-                c = _apply_str_cmp(issue.c.description, sub["description"])
-                if c is not None:
-                    ors.append(c)
-        if ors:
-            stmt = stmt.where(or_(*ors))
+    for sub_filter in flt.get("and") or []:
+        stmt = _apply_issue_filter(conn, stmt, org_id, viewer_id, sub_filter)
+    if flt.get("or"):
+        alternatives = []
+        for sub_filter in flt["or"]:
+            subquery = select(issue.c.id).where(and_(
+                issue.c.organization_id == org_id,
+                issue.c.archived_at.is_(None),
+            ))
+            subquery = _apply_issue_filter(
+                conn, subquery, org_id, viewer_id, sub_filter
+            )
+            alternatives.append(issue.c.id.in_(subquery))
+        stmt = stmt.where(or_(*alternatives))
     return stmt
