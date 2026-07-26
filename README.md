@@ -1,25 +1,32 @@
-# clinear
+# Cliniar
 
-> Type-safe Linear CLI built on Pydantic v2 + httpx + Typer.
+> Self-hosted, offline-first, agent-native work management with a
+> Linear-compatible GraphQL interface.
 
-A Linear command-line interface designed for **humans, agents, and CI/CD pipelines**. Every API response is a validated Pydantic model. Every command works in shell pipelines. JSON output is the canonical contract; the pretty human tables sit on top of it.
+Cliniar combines a type-safe CLI, an optional MCP server, and a generic
+self-hosted backend. It is designed for humans, agents, and automation:
+responses are validated Pydantic models, commands compose in shell pipelines,
+and JSON output is the stable machine contract. Use the hosted Linear API or
+point the same client at a local SQLite or shared PostgreSQL deployment.
 
 ```
-clinear me                          # who am I?
-clinear team list                   # all teams in workspace
-clinear issue list --assignee me    # my issues
-clinear issue create --team ENG --title "Fix login bug" --priority 1
-clinear -o json issue list | jq '.[].title'    # pipe into anything
+cliniar me                          # who am I?
+cliniar team list                   # all teams in workspace
+cliniar issue list --assignee me    # my issues
+cliniar issue create --team ENG --title "Fix login bug" --priority 1
+cliniar -o json issue list | jq '.[].title'    # pipe into anything
 ```
 
 ---
 
-## Why clinear?
+## Why Cliniar?
 
 - **Type-safe.** Every response validated through Pydantic v2. No silent schema drift.
 - **Agent-first.** Stable JSON contracts; pipe-friendly `-o ids` / `-o md` / `-o yaml`.
 - **Tiny attack surface.** Only Pydantic + httpx + Typer + Rich. No npm chaos, no `postinstall` hooks.
 - **Honest errors.** Linear API errors surfaced verbatim with proper POSIX exit codes.
+- **Offline-first and self-hostable.** Work locally without a network dependency
+  or deploy the same generic backend with PostgreSQL.
 - **Built for automation.** `--dry-run` for safe mutation previews, `raw query` escape hatch for any GraphQL.
 
 ---
@@ -28,15 +35,15 @@ clinear -o json issue list | jq '.[].title'    # pipe into anything
 
 ```bash
 # From PyPI (recommended)
-pip install clinear
+pip install cliniar
 # or
-uv tool install clinear
+uv tool install cliniar
 ```
 
 ```bash
 # From source
-git clone https://github.com/rinadelph/clinear.git
-cd clinear
+git clone <repository-url> cliniar
+cd cliniar
 uv venv && source .venv/bin/activate
 uv pip install -e .
 ```
@@ -54,36 +61,36 @@ Generate a personal API key at <https://linear.app/settings/api>.
 ```bash
 export LINEAR_TOKEN="lin_api_..."
 # Or persist a config:
-clinear init
+cliniar init
 ```
 
 ### 3. Verify
 
 ```bash
-clinear me
+cliniar me
 ```
 
 ### 4. Use it
 
 ```bash
 # Read
-clinear team list
-clinear issue get ENG-123
-clinear issue list --assignee me --state Todo
+cliniar team list
+cliniar issue get ENG-123
+cliniar issue list --assignee me --state Todo
 
 # Write
-clinear issue create --team ENG --title "Fix login bug" --priority 1
-clinear issue assign ENG-123 me
-clinear issue state ENG-123 "In Progress"
-clinear issue prio ENG-123 1
-clinear comment add ENG-123 "Started on this — investigating now"
+cliniar issue create --team ENG --title "Fix login bug" --priority 1
+cliniar issue assign ENG-123 me
+cliniar issue state ENG-123 "In Progress"
+cliniar issue prio ENG-123 1
+cliniar comment add ENG-123 "Started on this — investigating now"
 
 # Pipe
-clinear -o ids issue list --assignee me | xargs -I{} clinear issue url {}
-clinear -o json issue list --state Todo | jq '.[] | "\(.identifier): \(.title)"'
+cliniar -o ids issue list --assignee me | xargs -I{} cliniar issue url {}
+cliniar -o json issue list --state Todo | jq '.[] | "\(.identifier): \(.title)"'
 
 # Safety net
-clinear --dry-run issue update ENG-123 --priority 2
+cliniar --dry-run issue update ENG-123 --priority 2
 ```
 
 ---
@@ -106,9 +113,9 @@ Set with `-o` / `--output` **before** the subcommand:
 ## Command Reference
 
 ```
-clinear
+cliniar
 ├── me / auth status / auth whoami
-├── init                          Create ~/.config/clinear/config.toml
+├── init                          Create ~/.config/cliniar/config.toml
 ├── team list / get / states / members
 ├── issue
 │   ├── list   --team --state --assignee --label --priority --contains ...
@@ -127,13 +134,13 @@ clinear
 └── raw query <graphql>           Escape hatch — arbitrary GraphQL
 ```
 
-Run `clinear <command> --help` for full flags on any subcommand.
+Run `cliniar <command> --help` for full flags on any subcommand.
 
 ---
 
 ## Configuration
 
-Default location: `~/.config/clinear/config.toml`. Override with `$CLINEAR_CONFIG`.
+Default location: `~/.config/cliniar/config.toml`. Override with `$CLINIAR_CONFIG`.
 
 ```toml
 [auth]
@@ -148,7 +155,43 @@ color = true
 table_max_width = 120
 ```
 
-Run `clinear init` to scaffold the file.
+Run `cliniar init` to scaffold the file.
+
+### Migration from `clinear` (v0.7.0)
+
+The `clinear`, `clinear-mcp`, and `clinear-serve` executable aliases are
+deprecated but remain available for one release. New integrations must use
+`cliniar`, `cliniar-mcp`, and `cliniar-serve`.
+
+Cliniar reads `CLINIAR_*` variables and the canonical
+`~/.config/cliniar/config.toml` and `$XDG_DATA_HOME/cliniar/` locations first.
+For the same one-release transition it falls back to matching `CLINEAR_*`
+variables and legacy `~/.config/clinear/` and `$XDG_DATA_HOME/clinear/` paths
+when no canonical value exists. `LINEAR_TOKEN`, `LINEAR_API_URL`, Linear API
+field names, and GraphQL wire names are unchanged. Migrate files rather than
+maintaining two writable copies:
+
+```bash
+mkdir -p ~/.config/cliniar
+cp ~/.config/clinear/config.toml ~/.config/cliniar/config.toml
+```
+
+### Self-hosted backend
+
+Install `cliniar[server]` to run the Linear-compatible backend with either
+isolated SQLite files or a shared PostgreSQL database:
+
+```bash
+pip install 'cliniar[server]'
+cliniar-serve seed --tenant local
+cliniar-serve serve --tenant local
+```
+
+Point an account's `base_url` (or `LINEAR_API_URL`) at the resulting
+`/graphql` endpoint. `CLINIAR_DATABASE_URL` selects shared PostgreSQL storage,
+while `CLINIAR_APP_URL` controls the browser-facing issue and project links
+returned by the backend. See [the deployment guide](docs/DEPLOYMENT.md) for
+database precedence, multi-organization token provisioning, and health checks.
 
 ---
 
@@ -172,7 +215,8 @@ Run `clinear init` to scaffold the file.
 
 - Token read from `$LINEAR_TOKEN`, `--token` flag, or `config.toml`. Never logged in plaintext.
 - HTTPS-only. TLS verification mandatory.
-- No telemetry. Zero outbound calls except to `api.linear.app`.
+- No telemetry. Outbound API calls go only to the configured account endpoint
+  (`api.linear.app` by default, or an explicitly configured compatible backend).
 - Pre-commit hook blocks committing tokens, `.log` files, `.env` files. See `scripts/pre-commit.sh`.
 
 ---
@@ -182,8 +226,8 @@ Run `clinear init` to scaffold the file.
 See [AGENTS.md](./AGENTS.md) for the contributor guide — architecture, testing, version bumping, and release process.
 
 ```bash
-git clone https://github.com/rinadelph/clinear.git
-cd clinear
+git clone <repository-url> cliniar
+cd cliniar
 bash scripts/install-hooks.sh    # install pre-commit hook
 uv venv && uv pip install -e ".[dev]"
 export LINEAR_TOKEN="lin_api_..."
@@ -200,31 +244,31 @@ MIT — see [LICENSE](./LICENSE).
 
 ## For AI agents — Skill & MCP server
 
-clinear ships with two artifacts specifically for AI coding agents:
+cliniar ships with two artifacts specifically for AI coding agents:
 
 ### 1. Agent skill bundle
 
 A Swarm/Claude-style skill that teaches an agent both the mechanics of
-`clinear` and the *behavior* of working through Linear (search before
+`cliniar` and the *behavior* of working through Linear (search before
 create, use `--output json` for pipes, chain commands in shell instead of
 writing Python, etc.).
 
 Install:
 
 ```bash
-git clone https://github.com/rinadelph/clinear.git
-cd clinear
+git clone <repository-url> cliniar
+cd cliniar
 bash skills/install.sh
 ```
 
-This symlinks `skills/clinear/` into BOTH:
+This symlinks `skills/cliniar/` into BOTH:
 
-- `~/.swarmos/skills/clinear/` (for Swarm OS)
-- `~/.claude/skills/clinear/` (for Claude Code / Claude Desktop)
+- `~/.swarmos/skills/cliniar/` (for Swarm OS)
+- `~/.claude/skills/cliniar/` (for Claude Code / Claude Desktop)
 
 Flags: `--swarm-only`, `--claude-only`, `--copy` (no symlinks), `--uninstall`.
 
-### 2. MCP server (`clinear-mcp`)
+### 2. MCP server (`cliniar-mcp`)
 
 An optional Model Context Protocol server that exposes the same teaching
 content as an MCP tool, plus read-only Linear resources and prompt
@@ -232,18 +276,18 @@ templates for common workflows.
 
 **What it exposes:**
 
-- **1 tool** — `clinear_guide(topic)` returns structured teaching content.
+- **1 tool** — `cliniar_guide(topic)` returns structured teaching content.
   Topics: `overview`, `commands`, `workflows`, `filters`, `output-formats`,
   `examples`.
-- **7 read-only resources** — `clinear://me`, `clinear://issue/{id}`,
-  `clinear://team/{key}`, `clinear://project/{id_or_slug}`,
-  `clinear://cycle/current/{team_key}`, `clinear://issues/mine`,
-  `clinear://issues/team/{team_key}`.
+- **7 read-only resources** — `cliniar://me`, `cliniar://issue/{id}`,
+  `cliniar://team/{key}`, `cliniar://project/{id_or_slug}`,
+  `cliniar://cycle/current/{team_key}`, `cliniar://issues/mine`,
+  `cliniar://issues/team/{team_key}`.
 - **6 prompts** — `triage`, `daily_standup`, `create_from_error`,
   `hand_off`, `cycle_review`, `issue_investigate`.
 
 **The server exposes NO mutation tools** by design. Mutations are performed
-via the `clinear` CLI through the agent's Bash tool — the MCP tool's
+via the `cliniar` CLI through the agent's Bash tool — the MCP tool's
 response and every prompt body include a behavioral reminder reinforcing
 this rule.
 
@@ -253,21 +297,21 @@ The server is an optional extra. Pick one:
 
 ```bash
 # Option A — pip
-pip install 'clinear[mcp]'
+pip install 'cliniar[mcp]'
 
 # Option B — uv (recommended; isolated tool install)
-uv tool install --with mcp 'clinear==0.3.0'
+uv tool install --with mcp 'cliniar==0.3.0'
 
 # Option C — pipx
-pipx install 'clinear[mcp]'
+pipx install 'cliniar[mcp]'
 ```
 
 After install, you should have **both** binaries on `PATH`:
 
 ```bash
-which clinear           # /home/you/.local/bin/clinear
-which clinear-mcp       # /home/you/.local/bin/clinear-mcp
-clinear --version       # clinear 0.3.0
+which cliniar           # /home/you/.local/bin/cliniar
+which cliniar-mcp       # /home/you/.local/bin/cliniar-mcp
+cliniar --version       # cliniar 0.3.0
 ```
 
 #### Step 2 — Set up the Linear token
@@ -282,8 +326,8 @@ echo 'export LINEAR_TOKEN="<YOUR_LINEAR_TOKEN>"' >> ~/.bashrc
 # Or ~/.zshrc, ~/.config/fish/config.fish, etc.
 
 # Option B — config file (good for desktop apps that don't inherit shell env)
-clinear init                          # writes ~/.config/clinear/config.toml
-# Then edit ~/.config/clinear/config.toml:
+cliniar init                          # writes ~/.config/cliniar/config.toml
+# Then edit ~/.config/cliniar/config.toml:
 #   [auth]
 #   token = "<YOUR_LINEAR_TOKEN>"
 ```
@@ -292,8 +336,8 @@ Get your token at <https://linear.app/settings/api> (create a personal API
 key). Verify it works:
 
 ```bash
-clinear me            # should print your Linear profile
-clinear auth status   # shows which token source resolved
+cliniar me            # should print your Linear profile
+cliniar auth status   # shows which token source resolved
 ```
 
 > **Note for desktop MCP clients** (Claude Desktop, Cursor, etc.): GUI
@@ -309,8 +353,8 @@ clinear auth status   # shows which token source resolved
 ```json
 {
   "mcpServers": {
-    "clinear": {
-      "command": "clinear-mcp",
+    "cliniar": {
+      "command": "cliniar-mcp",
       "env": {
         "LINEAR_TOKEN": "<YOUR_LINEAR_TOKEN>"
       }
@@ -322,7 +366,7 @@ clinear auth status   # shows which token source resolved
 **Claude Code (CLI)** — add via the `claude mcp` command:
 
 ```bash
-claude mcp add clinear clinear-mcp --env LINEAR_TOKEN=<YOUR_LINEAR_TOKEN>
+claude mcp add cliniar cliniar-mcp --env LINEAR_TOKEN=<YOUR_LINEAR_TOKEN>
 ```
 
 Or edit `~/.claude.json` directly:
@@ -330,8 +374,8 @@ Or edit `~/.claude.json` directly:
 ```json
 {
   "mcpServers": {
-    "clinear": {
-      "command": "clinear-mcp",
+    "cliniar": {
+      "command": "cliniar-mcp",
       "env": { "LINEAR_TOKEN": "<YOUR_LINEAR_TOKEN>" }
     }
   }
@@ -343,8 +387,8 @@ Or edit `~/.claude.json` directly:
 ```json
 {
   "mcpServers": {
-    "clinear": {
-      "command": "clinear-mcp",
+    "cliniar": {
+      "command": "cliniar-mcp",
       "env": { "LINEAR_TOKEN": "<YOUR_LINEAR_TOKEN>" }
     }
   }
@@ -355,7 +399,7 @@ Or edit `~/.claude.json` directly:
 (`~/.swarmos/mcp/servers.json` or via `swarm mcp add`):
 
 ```bash
-swarm mcp add clinear --command clinear-mcp --env LINEAR_TOKEN=<YOUR_LINEAR_TOKEN>
+swarm mcp add cliniar --command cliniar-mcp --env LINEAR_TOKEN=<YOUR_LINEAR_TOKEN>
 ```
 
 **Codex CLI** (`~/.config/codex/mcp.json`):
@@ -363,40 +407,40 @@ swarm mcp add clinear --command clinear-mcp --env LINEAR_TOKEN=<YOUR_LINEAR_TOKE
 ```json
 {
   "servers": {
-    "clinear": {
-      "command": "clinear-mcp",
+    "cliniar": {
+      "command": "cliniar-mcp",
       "env": { "LINEAR_TOKEN": "<YOUR_LINEAR_TOKEN>" }
     }
   }
 }
 ```
 
-If `clinear-mcp` is not on the system `PATH` of the GUI app (common on macOS),
+If `cliniar-mcp` is not on the system `PATH` of the GUI app (common on macOS),
 use the absolute path:
 
 ```json
 {
   "mcpServers": {
-    "clinear": {
-      "command": "/home/you/.local/bin/clinear-mcp",
+    "cliniar": {
+      "command": "/home/you/.local/bin/cliniar-mcp",
       "env": { "LINEAR_TOKEN": "<YOUR_LINEAR_TOKEN>" }
     }
   }
 }
 ```
 
-Find the absolute path with `which clinear-mcp`.
+Find the absolute path with `which cliniar-mcp`.
 
 #### Step 4 — Verify the wiring
 
 Restart the MCP client and confirm the server connects. From inside the
 client you should see:
 
-- **1 tool**: `clinear_guide`
-- **2 concrete resources**: `clinear://me`, `clinear://issues/mine`
-- **5 resource templates**: `clinear://issue/{id}`, `clinear://team/{key}`,
-  `clinear://project/{id_or_slug}`, `clinear://cycle/current/{team_key}`,
-  `clinear://issues/team/{team_key}`
+- **1 tool**: `cliniar_guide`
+- **2 concrete resources**: `cliniar://me`, `cliniar://issues/mine`
+- **5 resource templates**: `cliniar://issue/{id}`, `cliniar://team/{key}`,
+  `cliniar://project/{id_or_slug}`, `cliniar://cycle/current/{team_key}`,
+  `cliniar://issues/team/{team_key}`
 - **6 prompts**: `triage`, `daily_standup`, `create_from_error`,
   `hand_off`, `cycle_review`, `issue_investigate`
 
@@ -404,7 +448,7 @@ If you have the MCP Inspector installed, you can also smoke-test from a
 terminal:
 
 ```bash
-npx @modelcontextprotocol/inspector clinear-mcp
+npx @modelcontextprotocol/inspector cliniar-mcp
 ```
 
 This launches a browser UI that lets you list tools/resources/prompts and
@@ -415,18 +459,18 @@ For a quick stdio sanity check without the Inspector:
 ```bash
 (echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}'
  echo '{"jsonrpc":"2.0","method":"notifications/initialized"}'
- echo '{"jsonrpc":"2.0","id":2,"method":"tools/list"}') | clinear-mcp | head -3
+ echo '{"jsonrpc":"2.0","id":2,"method":"tools/list"}') | cliniar-mcp | head -3
 ```
 
 You should see a JSON-RPC initialize response followed by `tools/list`
-returning `clinear_guide`.
+returning `cliniar_guide`.
 
 #### Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| `clinear-mcp: command not found` in GUI app | Use absolute path in the MCP config (`which clinear-mcp`) |
+| `cliniar-mcp: command not found` in GUI app | Use absolute path in the MCP config (`which cliniar-mcp`) |
 | Server starts but resource reads return auth error | Token not visible to the server — pass it via the config's `env` block instead of relying on shell `export` |
-| `pip install 'clinear[mcp]'` fails with quoting error | Some shells eat the brackets — quote the whole spec or escape: `pip install clinear\[mcp\]` |
+| `pip install 'cliniar[mcp]'` fails with quoting error | Some shells eat the brackets — quote the whole spec or escape: `pip install cliniar\[mcp\]` |
 | Tool list is empty in client | Restart the MCP client after editing the config; some clients cache `tools/list` |
-| Stdout looks corrupted | Don't run `clinear-mcp` interactively — it speaks JSON-RPC on stdin/stdout. Logs go to stderr. |
+| Stdout looks corrupted | Don't run `cliniar-mcp` interactively — it speaks JSON-RPC on stdin/stdout. Logs go to stderr. |

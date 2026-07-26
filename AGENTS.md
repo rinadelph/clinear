@@ -1,6 +1,14 @@
-# AGENTS.md — Contributing to clinear
+# AGENTS.md — Contributing to Cliniar
 
 > Guide for humans and AI agents who modify this codebase.
+
+Cliniar is generic, self-hosted, offline-first, agent-native work management
+with a Linear-compatible GraphQL interface. Do not encode a particular
+organization, repository owner, or deployment as a product default. New work
+uses `cliniar`, `cliniar-mcp`, `cliniar-serve`, `CLINIAR_*`, and `cliniar`
+config/data paths. The old commands, `CLINEAR_*`, and `clinear` paths are
+one-release compatibility fallbacks only. Preserve the wire-facing
+`LINEAR_TOKEN`, `LINEAR_API_URL`, and Linear GraphQL names.
 
 ---
 
@@ -17,12 +25,12 @@
 ## Architecture
 
 ```
-clinear/
+cliniar/
 ├── VERSION                    Source of truth for __version__
 ├── pyproject.toml             Build metadata (must match VERSION)
 ├── CHANGELOG.md               Keep-a-Changelog format
 │
-├── clinear/                   Package
+├── cliniar/                   Package
 │   ├── __init__.py            Reads VERSION
 │   ├── cli.py                 Root Typer app, global flags, error wrapper
 │   ├── cli_state.py           Per-invocation state container
@@ -42,17 +50,17 @@ clinear/
 │   │   ├── filters.md
 │   │   ├── output-formats.md
 │   │   └── examples.md
-│   └── mcp/                   Optional MCP server (`pip install 'clinear[mcp]'`)
-│       ├── content.py         ClinearGuide Pydantic model + load_topic()
+│   └── mcp/                   Optional MCP server (`pip install 'cliniar[mcp]'`)
+│       ├── content.py         CliniarGuide Pydantic model + load_topic()
 │       ├── resources.py       7 read-only resource handlers
 │       ├── prompts.py         6 workflow prompt templates
-│       └── server.py          FastMCP wire-up; entry point of `clinear-mcp`
+│       └── server.py          FastMCP wire-up; entry point of `cliniar-mcp`
 │
 ├── skills/                    Agent skill bundle (installable into ~/.swarmos and ~/.claude)
-│   ├── install.sh             Symlinks skills/clinear into both skill dirs
-│   └── clinear/
+│   ├── install.sh             Symlinks skills/cliniar into both skill dirs
+│   └── cliniar/
 │       ├── SKILL.md           Frontmatter + body (mechanics + behavior + safety)
-│       └── references/        Symlinks → ../../clinear/skill_content/*.md
+│       └── references/        Symlinks → ../../cliniar/skill_content/*.md
 │
 ├── schema/
 │   ├── linear-schema.json     2.3 MB introspection result (GITIGNORED)
@@ -70,32 +78,32 @@ clinear/
 
 ```
 User CLI input
-  └─► clinear.cli.app (Typer)
+  └─► cliniar.cli.app (Typer)
         └─► global flags resolved → cli_state.CLIState
-              └─► subcommand handler (clinear/commands/*.py)
-                    └─► clinear.client.LinearClient.execute_as()
+              └─► subcommand handler (cliniar/commands/*.py)
+                    └─► cliniar.client.LinearClient.execute_as()
                           ├─► httpx POST to api.linear.app/graphql
                           ├─► JSON → dict
                           └─► dict → Pydantic model (validation)
-                                └─► clinear.output.render(model, fmt)
+                                └─► cliniar.output.render(model, fmt)
                                       └─► stdout
 ```
 
 ### Adding a new command
 
-1. Pick the right file in `clinear/commands/` (or create one).
+1. Pick the right file in `cliniar/commands/` (or create one).
 2. Add a Typer command with rich `--help` text.
-3. Write the GraphQL string in `clinear/graphql/queries.py` or `mutations.py`. Use fragments from `fragments.py`.
-4. If the response shape is new, add or extend a Pydantic model in `clinear/models/`.
-5. Register the new command group in `clinear/cli.py` via `app.add_typer(...)`.
+3. Write the GraphQL string in `cliniar/graphql/queries.py` or `mutations.py`. Use fragments from `fragments.py`.
+4. If the response shape is new, add or extend a Pydantic model in `cliniar/models/`.
+5. Register the new command group in `cliniar/cli.py` via `app.add_typer(...)`.
 6. Add an E2E test case in `scripts/e2e-test.sh`.
 7. Bump version. Update CHANGELOG.
 
 ### Adding a new model
 
 ```python
-# clinear/models/your_entity.py
-from clinear.models.base import Timestamped
+# cliniar/models/your_entity.py
+from cliniar.models.base import Timestamped
 
 class YourEntity(Timestamped):
     id: str
@@ -110,7 +118,7 @@ Keep fragments **DRY** and **small**. One fragment per entity "view":
 - `YourEntityFull` → extra fields included on detail views
 
 ```python
-# clinear/graphql/fragments.py
+# cliniar/graphql/fragments.py
 YOUR_ENTITY_CORE = """
 fragment YourEntityCore on YourEntity {
   id
@@ -127,8 +135,8 @@ fragment YourEntityCore on YourEntity {
 ### Setup
 
 ```bash
-git clone https://github.com/rinadelph/clinear.git
-cd clinear
+git clone <repository-url> cliniar
+cd cliniar
 bash scripts/install-hooks.sh        # MANDATORY — installs the secret-blocking pre-commit hook
 uv venv
 source .venv/bin/activate
@@ -144,14 +152,14 @@ export LINEAR_TOKEN="lin_api_..."
 # 2. Edit code
 
 # 3. Smoke test live API
-.venv/bin/clinear me
+.venv/bin/cliniar me
 
 # 4. Full E2E suite (takes ~30s)
 bash scripts/e2e-test.sh
 
 # 5. Lint + type check
-uv run ruff check clinear/
-uv run mypy clinear/
+uv run ruff check cliniar/
+uv run mypy cliniar/
 
 # 6. Bump version (see "Versioning" below)
 
@@ -227,7 +235,7 @@ We follow [Semantic Versioning](https://semver.org/):
 bash scripts/e2e-test.sh
 
 # Lint passes?
-uv run ruff check clinear/
+uv run ruff check cliniar/
 
 # Version is bumped in BOTH places?
 cat VERSION
@@ -253,8 +261,8 @@ git push origin v0.3.0
 ```bash
 rm -rf dist/
 uv build
-# → dist/clinear-0.3.0-py3-none-any.whl
-# → dist/clinear-0.3.0.tar.gz
+# → dist/cliniar-0.3.0-py3-none-any.whl
+# → dist/cliniar-0.3.0.tar.gz
 ```
 
 ### 4. Publish to PyPI
@@ -271,16 +279,16 @@ uv publish
 gh release create v0.3.0 \
     --title "v0.3.0" \
     --notes-file <(awk '/^## \[0.3.0\]/,/^## \[/{if (!/^## \[/) print; if (/^## \[/ && !found) found=1; else if (/^## \[/) exit}' CHANGELOG.md) \
-    dist/clinear-0.3.0-py3-none-any.whl \
-    dist/clinear-0.3.0.tar.gz
+    dist/cliniar-0.3.0-py3-none-any.whl \
+    dist/cliniar-0.3.0.tar.gz
 ```
 
 ### 6. Verify
 
 ```bash
 # Wait ~60s for PyPI to propagate, then:
-uv tool install --refresh clinear
-clinear --version  # should print the new version
+uv tool install --refresh cliniar
+cliniar --version  # should print the new version
 ```
 
 ---
@@ -310,9 +318,9 @@ It also blocks these file types entirely:
 ## House Rules
 
 1. **No new runtime dependencies without a security review.** Every dep is a supply-chain attack vector. The dependency tree is currently: `pydantic + pydantic-core (Rust binary) + httpx + httpcore + h11 + idna + certifi + sniffio + anyio + typer + click + shellingham + rich + markdown-it-py + mdurl + pygments + typing-extensions + annotated-types + annotated-doc + exceptiongroup + tomli (py<3.11)`. Don't add to it without justification.
-2. **No `dict[str, Any]` leaks** out of `clinear.client`. Everything that hits a command handler must be a Pydantic model.
-3. **No silent failures.** If something can't be done, raise a `ClinearError` subclass with a helpful `hint`.
-4. **No print statements** outside `clinear/output.py` and a couple of init-related scripts. All output goes through the formatter.
+2. **No `dict[str, Any]` leaks** out of `cliniar.client`. Everything that hits a command handler must be a Pydantic model.
+3. **No silent failures.** If something can't be done, raise a `CliniarError` subclass with a helpful `hint`.
+4. **No print statements** outside `cliniar/output.py` and a couple of init-related scripts. All output goes through the formatter.
 5. **No `--insecure` flag, ever.** TLS verification is non-negotiable.
 
 ---
@@ -322,15 +330,15 @@ It also blocks these file types entirely:
 1. Re-run `bash scripts/e2e-test.sh -v` (verbose flag prints full output).
 2. Linear API errors will be in the error message verbatim — look for `GRAPHQL_VALIDATION_FAILED` (your query is wrong) vs. `AUTHENTICATION_ERROR` (token issue).
 3. Pydantic validation errors mean the response shape changed or the model is wrong. Run with `--verbose` to see the raw response.
-4. `clinear raw query 'query { ... }'` is your friend — bypass our models, talk directly to Linear's GraphQL.
+4. `cliniar raw query 'query { ... }'` is your friend — bypass our models, talk directly to Linear's GraphQL.
 5. Re-fetch the schema: `curl -X POST https://api.linear.app/graphql -H "Authorization: $LINEAR_TOKEN" -d '<introspection query>'`. Update fragments/models as needed.
 
 ---
 
 ## Roadmap
 
-- v0.3 (current) — agent skill bundle + `clinear-mcp` MCP server (1 tool + 7 resources + 6 prompts).
-- v0.4 — pytest unit tests, hash-pinned `requirements.txt`, `docs/COMMANDS.md`, `clinear completions` for shell completion install
-- v0.5 — `clinear initiative`, `clinear document`, `clinear customer` (next-tier domains)
+- v0.3 (current) — agent skill bundle + `cliniar-mcp` MCP server (1 tool + 7 resources + 6 prompts).
+- v0.4 — pytest unit tests, hash-pinned `requirements.txt`, `docs/COMMANDS.md`, `cliniar completions` for shell completion install
+- v0.5 — `cliniar initiative`, `cliniar document`, `cliniar customer` (next-tier domains)
 - v0.6 — config-defined views (`--view my-bugs`), aliases
 - v1.0 — stable command surface, full integration with the 8 priority domains

@@ -1,9 +1,105 @@
 # Changelog
 
-All notable changes to clinear will be documented in this file.
+All notable changes to Cliniar will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+---
+
+## [0.7.0] — 2026-07-26
+
+### Changed
+
+- Renamed the product and canonical distribution to **Cliniar**, a generic
+  self-hosted, offline-first, agent-native work-management system with a
+  Linear-compatible GraphQL interface.
+- Canonical executables are now `cliniar`, `cliniar-mcp`, and `cliniar-serve`;
+  Python packages, release artifacts, skill metadata, documentation, and
+  configuration/data directories use `cliniar`.
+- Canonical application variables now use the `CLINIAR_*` prefix. The existing
+  `LINEAR_TOKEN` and `LINEAR_API_URL` variables remain unchanged, as do Linear
+  API field names and GraphQL wire names.
+- Removed product ownership and deployment assumptions from the self-hosted
+  backend. CloverOps is one tested external consumer of the compatible GraphQL
+  surface, not a product owner or required deployment.
+
+### Deprecated
+
+- `clinear`, `clinear-mcp`, and `clinear-serve` remain as executable aliases for
+  one release. They are compatibility shims; scripts and new integrations must
+  move to the canonical commands now.
+- Matching `CLINEAR_*` variables are read only as one-release fallbacks when
+  their `CLINIAR_*` equivalents are unset.
+- Existing `~/.config/clinear/` and `$XDG_DATA_HOME/clinear/` files are detected
+  only when the canonical `cliniar/` location is absent. Copy configuration and
+  data into the canonical location; do not maintain two writable copies.
+- The skill installer can create deprecated `clinear` discovery symlinks only
+  when explicitly passed `--legacy-links`, and never removes or replaces an
+  arbitrary existing directory.
+
+### Migration
+
+1. Replace command names with `cliniar`, `cliniar-mcp`, and `cliniar-serve`.
+2. Rename application variables from `CLINEAR_*` to `CLINIAR_*`; leave
+   `LINEAR_TOKEN` and `LINEAR_API_URL` unchanged.
+3. Move configuration to `~/.config/cliniar/config.toml` (or
+   `$XDG_CONFIG_HOME/cliniar/config.toml`) and local data to
+   `$XDG_DATA_HOME/cliniar/` (normally `~/.local/share/cliniar/`).
+4. Reinstall the canonical `skills/cliniar` skill. Use `--legacy-links` only
+   for agents that cannot yet discover the new name.
+
+---
+
+## [0.6.0] — 2026-07-15
+
+### Added
+- **`clinear-serve` — a local, self-hosted, Linear-API-compatible backend**
+  (new optional `clinear_server` package; install with `pip install 'clinear[server]'`).
+  Speaks the GraphQL subset used by clinear and compatible consumers, so
+  the CLI runs fully **offline** against a single-file SQLite database with **no
+  rate limits**.
+  - `clinear-serve seed` provisions a tenant (org, admin user, team, seeded
+    workflow states, API token) and prints the token.
+  - `clinear-serve serve` runs the GraphQL server on `127.0.0.1` (FastAPI/Starlette
+    + Ariadne + SQLAlchemy Core). `--open` enables zero-friction offline mode
+    (any token maps to the seeded identity).
+  - `clinear-serve token` mints additional tokens for a tenant.
+  - **Multi-tenant by token:** each API token maps to exactly one organization;
+    every resolver is org-scoped, so tenants are isolated by construction. One
+    backend endpoint serves N tenants via N tokens.
+  - Implements `rateLimitStatus` returning effectively-unlimited values and never
+    emits HTTP 429.
+  - Per-team monotonic issue identifier counter (`ENG-1`, `ENG-2`, …), derived
+    `priorityLabel`/`url`/`branchName`, and workflow state-transition timestamps.
+  - **PostgreSQL shared-database support:** all server commands resolve explicit
+    `--database-url` then `CLINEAR_DATABASE_URL` then the existing SQLite target;
+    psycopg 3 uses connection pre-ping and SQLite-only pragmas remain isolated.
+    Organization URL keys are unique, token minting explicitly selects an
+    organization and user/email in shared databases, API token hashes are
+    globally unique, and issue counters use a portable organization-scoped
+    atomic update in the insert transaction.
+  - Ordered schema revisions support upgrades of existing SQLite and PostgreSQL
+    deployments; `clinear-serve migrate` is the explicit hosted deployment step.
+  - Mutation references are validated against the authenticated organization
+    and compatible team before writes, including states, assignees, projects,
+    cycles, parents, labels, project leads, and project-team relationships.
+  - CloverOps compatibility includes batched bootstrap aliases, top-level
+    workflow-state/cycle filters, project teams/health, issue identifier lookup,
+    state transitions, comments, and persisted URL attachments.
+  - `$CLINEAR_APP_URL` configures generated issue/project links for owned hosted
+    deployments (local default `http://localhost:8787`), and `/ready` verifies
+    database connectivity plus schema currency separately from `/health`.
+- **`base_url` account setting** (`accounts.<name>.base_url`) plus the
+  `$LINEAR_API_URL` environment override, letting clinear point at a local
+  backend (or any Linear-compatible endpoint) with no other change. Defaults to
+  the real Linear API when unset.
+- `scripts/e2e-local-backend.sh` — a 17-check end-to-end suite that boots the
+  local backend and drives the real clinear CLI against it (me, teams, states,
+  issue create/get/state/assign/prio, comments, filters, search, labels, auth).
+
+### Notes
+- Sync (offline↔online op-log + LWW) remains a separate, unimplemented feature.
 
 ---
 

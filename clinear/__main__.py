@@ -1,6 +1,5 @@
-"""Entry point for `python -m clinear`."""
+"""Compatibility entry point for ``python -m clinear``."""
 
-from clinear.cli import app
+from cliniar.cli import app
 
-if __name__ == "__main__":
-    app()
+app()
