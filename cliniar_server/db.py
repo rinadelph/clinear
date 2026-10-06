@@ -31,7 +31,7 @@ from sqlalchemy.exc import IntegrityError
 from cliniar.compat import env_value, warn_legacy
 
 metadata = MetaData()
-CURRENT_SCHEMA_REVISION = 4
+CURRENT_SCHEMA_REVISION = 12
 
 
 def now_iso() -> str:
@@ -50,6 +50,10 @@ def gen_token() -> str:
     return "lin_api_" + secrets.token_urlsafe(30)
 
 
+def gen_session_token() -> str:
+    return secrets.token_urlsafe(48)
+
+
 # --------------------------------------------------------------------------
 # Tables
 # --------------------------------------------------------------------------
@@ -62,6 +66,45 @@ organization = Table(
     Column("updated_at", String),
 )
 
+global_identity = Table(
+    "global_identity", metadata,
+    Column("id", String, primary_key=True),
+    Column("email", String, nullable=False, index=True),
+    Column("created_at", String, nullable=False),
+)
+
+organization_membership = Table(
+    "organization_membership", metadata,
+    Column("id", String, primary_key=True),
+    Column("identity_id", String, ForeignKey("global_identity.id"), nullable=False, index=True),
+    Column("organization_id", String, ForeignKey("organization.id"), nullable=False, index=True),
+    Column("profile_user_id", String, ForeignKey("user.id"), nullable=False, unique=True),
+    Column("active", Boolean, nullable=False, default=True),
+    Column("created_at", String, nullable=False),
+    UniqueConstraint("identity_id", "organization_id", name="uq_membership_identity_org"),
+)
+
+identity_credential = Table(
+    "identity_credential", metadata,
+    Column("identity_id", String, ForeignKey("global_identity.id"), primary_key=True),
+    Column("password_hash", String, nullable=False),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+)
+
+membership_invitation = Table(
+    "membership_invitation", metadata,
+    Column("id", String, primary_key=True),
+    Column("token_hash", String, nullable=False, unique=True, index=True),
+    Column("organization_id", String, ForeignKey("organization.id"), nullable=False, index=True),
+    Column("profile_user_id", String, ForeignKey("user.id"), nullable=False, unique=True),
+    Column("created_by_profile_id", String, ForeignKey("user.id"), nullable=False),
+    Column("created_at", String, nullable=False),
+    Column("expires_at", String, nullable=False),
+    Column("accepted_at", String),
+    Column("accepted_identity_id", String, ForeignKey("global_identity.id")),
+)
+
 api_key = Table(
     "api_key", metadata,
     Column("id", String, primary_key=True),
@@ -70,6 +113,25 @@ api_key = Table(
     Column("user_id", String, ForeignKey("user.id")),
     Column("organization_id", String, ForeignKey("organization.id")),
     Column("created_at", String),
+    Column("revoked_at", String),
+)
+
+password_credential = Table(
+    "password_credential", metadata,
+    Column("user_id", String, ForeignKey("user.id"), primary_key=True),
+    Column("password_hash", String, nullable=False),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+)
+
+browser_session = Table(
+    "browser_session", metadata,
+    Column("id", String, primary_key=True),
+    Column("token_hash", String, nullable=False, unique=True, index=True),
+    Column("user_id", String, ForeignKey("user.id"), nullable=False, index=True),
+    Column("organization_id", String, ForeignKey("organization.id"), nullable=False, index=True),
+    Column("created_at", String, nullable=False),
+    Column("expires_at", String, nullable=False, index=True),
     Column("revoked_at", String),
 )
 
@@ -109,6 +171,13 @@ team = Table(
     Column("icon", String),
     Column("private", Boolean, default=False),
     Column("timezone", String),
+    Column("cadence_enabled", Boolean, nullable=False, default=False),
+    Column("cadence_weekday", Integer),
+    Column("cadence_anchor_at", String),
+    Column("cadence_policy_version", Integer),
+    Column("cadence_duration_weeks", Integer, nullable=False, default=1),
+    Column("cadence_cooldown_weeks", Integer, nullable=False, default=0),
+    Column("cadence_upcoming_count", Integer, nullable=False, default=2),
     Column("issue_counter", Integer, default=0),
     Column("active_cycle_id", String),
     Column("default_state_id", String),
@@ -208,6 +277,48 @@ comment = Table(
     Column("archived_at", String),
 )
 
+issue_activity = Table(
+    "issue_activity", metadata,
+    Column("id", String, primary_key=True),
+    Column("organization_id", String, ForeignKey("organization.id"), nullable=False, index=True),
+    Column("issue_id", String, ForeignKey("issue.id"), nullable=False, index=True),
+    Column("actor_id", String, ForeignKey("user.id")),
+    Column("event_type", String, nullable=False),
+    Column("changes", Text),
+    Column("created_at", String, nullable=False, index=True),
+)
+
+initiative = Table(
+    "initiative", metadata,
+    Column("id", String, primary_key=True),
+    Column("organization_id", String, ForeignKey("organization.id"), nullable=False, index=True),
+    Column("name", String, nullable=False), Column("summary", Text),
+    Column("status", String, nullable=False), Column("priority", Integer, nullable=False, default=0),
+    Column("owner_id", String, ForeignKey("user.id")), Column("creator_id", String, ForeignKey("user.id")),
+    Column("target_date", String), Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False), Column("archived_at", String),
+)
+
+initiative_project = Table(
+    "initiative_project", metadata,
+    Column("organization_id", String, ForeignKey("organization.id"), primary_key=True),
+    Column("initiative_id", String, ForeignKey("initiative.id"), primary_key=True),
+    Column("project_id", String, ForeignKey("project.id"), primary_key=True),
+)
+
+inbox_notification = Table(
+    "inbox_notification", metadata,
+    Column("id", String, primary_key=True),
+    Column("organization_id", String, ForeignKey("organization.id"), nullable=False, index=True),
+    Column("recipient_id", String, ForeignKey("user.id"), nullable=False, index=True),
+    Column("issue_id", String, ForeignKey("issue.id"), nullable=False, index=True),
+    Column("actor_id", String, ForeignKey("user.id")),
+    Column("kind", String, nullable=False),
+    Column("created_at", String, nullable=False, index=True),
+    Column("read_at", String),
+    Column("archived_at", String),
+)
+
 attachment = Table(
     "attachment", metadata,
     Column("id", String, primary_key=True),
@@ -241,6 +352,19 @@ project = Table(
     Column("archived_at", String),
 )
 
+project_update = Table(
+    "project_update", metadata,
+    Column("id", String, primary_key=True),
+    Column("organization_id", String, ForeignKey("organization.id"), nullable=False, index=True),
+    Column("project_id", String, ForeignKey("project.id"), nullable=False, index=True),
+    Column("status", String),
+    Column("body", Text, nullable=False),
+    Column("created_at", String, nullable=False, index=True),
+    Column("actor_id", String, ForeignKey("user.id")),
+    Column("progress", Float),
+    Column("health", String),
+)
+
 project_member = Table(
     "project_member", metadata,
     Column("project_id", String, ForeignKey("project.id"), primary_key=True),
@@ -263,12 +387,14 @@ cycle = Table(
     Column("description", String),
     Column("starts_at", String),
     Column("ends_at", String),
+    Column("cadence_boundary_at", String),
     Column("completed_at", String),
     Column("progress", Float, default=0),
     Column("created_at", String),
     Column("updated_at", String),
     Column("archived_at", String),
     UniqueConstraint("team_id", "number", name="uq_cycle_team_number"),
+    UniqueConstraint("team_id", "cadence_boundary_at", name="uq_cycle_team_cadence_boundary"),
 )
 
 
@@ -381,11 +507,74 @@ def _apply_token_hash_uniqueness(conn) -> None:
         )
 
 
+def _apply_identity_memberships(conn) -> None:
+    """Backfill a distinct identity and membership for every legacy profile."""
+    global_identity.create(conn, checkfirst=True)
+    organization_membership.create(conn, checkfirst=True)
+    identity_credential.create(conn, checkfirst=True)
+    profiles = conn.execute(select(user)).mappings().all()
+    for profile in profiles:
+        identity_id = new_id()
+        created_at = profile.get("created_at") or now_iso()
+        conn.execute(global_identity.insert().values(
+            id=identity_id, email=(profile.get("email") or "").strip().lower(),
+            created_at=created_at))
+        conn.execute(organization_membership.insert().values(
+            id=new_id(), identity_id=identity_id,
+            organization_id=profile["organization_id"], profile_user_id=profile["id"],
+            active=bool(profile.get("active", True)) and profile.get("archived_at") is None,
+            created_at=created_at))
+        old_credential = conn.execute(select(password_credential).where(
+            password_credential.c.user_id == profile["id"])).mappings().first()
+        if old_credential:
+            conn.execute(identity_credential.insert().values(
+                identity_id=identity_id, password_hash=old_credential["password_hash"],
+                created_at=old_credential["created_at"],
+                updated_at=old_credential["updated_at"]))
+
+
+def _apply_team_cadence(conn) -> None:
+    """Add opt-in cadence policy and an idempotent cycle-boundary key."""
+    inspector = inspect(conn)
+    existing = {column["name"] for column in inspector.get_columns("team")}
+    additions = {
+        "cadence_enabled": "BOOLEAN NOT NULL DEFAULT 0",
+        "cadence_weekday": "INTEGER",
+        "cadence_anchor_at": "VARCHAR",
+        "cadence_policy_version": "INTEGER",
+        "cadence_duration_weeks": "INTEGER NOT NULL DEFAULT 1",
+        "cadence_cooldown_weeks": "INTEGER NOT NULL DEFAULT 0",
+        "cadence_upcoming_count": "INTEGER NOT NULL DEFAULT 2",
+    }
+    for name, sql_type in additions.items():
+        if name not in existing:
+            conn.exec_driver_sql(f"ALTER TABLE team ADD COLUMN {name} {sql_type}")
+    cycle_columns = {column["name"] for column in inspect(conn).get_columns("cycle")}
+    if "cadence_boundary_at" not in cycle_columns:
+        conn.exec_driver_sql("ALTER TABLE cycle ADD COLUMN cadence_boundary_at VARCHAR")
+    indexes = inspect(conn).get_indexes("cycle")
+    constraints = inspect(conn).get_unique_constraints("cycle")
+    names = {item.get("name") for item in indexes + constraints}
+    if "uq_cycle_team_cadence_boundary" not in names:
+        conn.exec_driver_sql(
+            "CREATE UNIQUE INDEX uq_cycle_team_cadence_boundary "
+            "ON cycle (team_id, cadence_boundary_at)"
+        )
+
+
 _MIGRATIONS = {
     1: lambda _conn: None,
     2: _apply_token_hash_uniqueness,
     3: lambda conn: project_team.create(conn, checkfirst=True),
     4: lambda conn: attachment.create(conn, checkfirst=True),
+    5: lambda conn: (password_credential.create(conn, checkfirst=True), browser_session.create(conn, checkfirst=True)),
+    6: _apply_identity_memberships,
+    7: lambda conn: membership_invitation.create(conn, checkfirst=True),
+    8: lambda conn: issue_activity.create(conn, checkfirst=True),
+    9: lambda conn: project_update.create(conn, checkfirst=True),
+    10: lambda conn: inbox_notification.create(conn, checkfirst=True),
+    11: lambda conn: (initiative.create(conn, checkfirst=True), initiative_project.create(conn, checkfirst=True)),
+    12: _apply_team_cadence,
 }
 
 
@@ -498,6 +687,13 @@ def seed_tenant(engine: Engine, *, org_name: str = "Local",
                 url=entity_url(org_url_key, "profiles", uid),
                 timezone="UTC", created_at=ts, updated_at=ts,
             ))
+            if inspect(conn).has_table(global_identity.name):
+                identity_id = new_id()
+                conn.execute(global_identity.insert().values(
+                    id=identity_id, email=user_email.strip().lower(), created_at=ts))
+                conn.execute(organization_membership.insert().values(
+                    id=new_id(), identity_id=identity_id, organization_id=org_id,
+                    profile_user_id=uid, active=True, created_at=ts))
             conn.execute(api_key.insert().values(
                 id=new_id(), token_hash=token_hash(token), label="seed",
                 user_id=uid, organization_id=org_id, created_at=ts,

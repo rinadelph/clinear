@@ -1,6 +1,7 @@
 """Write operations with transactional identifiers and derived fields."""
 from __future__ import annotations
 
+import json
 from urllib.parse import urlparse
 
 from graphql import GraphQLError
@@ -14,6 +15,8 @@ from cliniar_server.db import (
     cycle,
     entity_url,
     issue,
+    issue_activity,
+    inbox_notification,
     issue_label,
     issue_label_link,
     new_id,
@@ -21,7 +24,11 @@ from cliniar_server.db import (
     organization,
     project,
     project_member,
+    project_update,
+    initiative,
+    initiative_project,
     project_team,
+    seed_states_for_team,
     team,
     team_member,
     user,
@@ -145,6 +152,201 @@ class Writer:
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
 
+    def workspace_create(self, actor_org_id: str, actor_id: str, inp: dict) -> dict:
+        """Create a workspace and enroll its creating identity as admin."""
+        from cliniar_server.db import global_identity, organization_membership
+
+        name = inp.get("name")
+        raw_key = inp.get("urlKey")
+        if not isinstance(name, str) or not name.strip():
+            raise GraphQLError("Workspace name is required", extensions={"code": "BAD_USER_INPUT", "field": "name"})
+        key = raw_key.strip().lower() if isinstance(raw_key, str) else ""
+        if not key or len(key) > 48 or not key.replace("-", "").isalnum() or key.startswith("-") or key.endswith("-") or "--" in key:
+            raise GraphQLError("Workspace key must contain letters, numbers, and hyphens", extensions={"code": "BAD_USER_INPUT", "field": "urlKey"})
+        ts, org_id, profile_id = now_iso(), new_id(), new_id()
+        with self.engine.begin() as conn:
+            actor = conn.execute(select(user).where(and_(
+                user.c.id == actor_id, user.c.organization_id == actor_org_id,
+                user.c.active.is_(True), user.c.archived_at.is_(None),
+                user.c.admin.is_(True),
+            ))).mappings().first()
+            if not actor:
+                raise GraphQLError("Admin access required", extensions={"code": "FORBIDDEN"})
+            if conn.execute(select(organization.c.id).where(
+                func.lower(organization.c.url_key) == key
+            )).first():
+                raise GraphQLError("Workspace key already exists", extensions={"code": "BAD_USER_INPUT", "field": "urlKey"})
+            member = conn.execute(select(organization_membership.c.identity_id).where(and_(
+                organization_membership.c.organization_id == actor_org_id,
+                organization_membership.c.profile_user_id == actor_id,
+                organization_membership.c.active.is_(True),
+            ))).first()
+            if not member:
+                raise GraphQLError("Workspace identity is unavailable", extensions={"code": "FORBIDDEN"})
+            conn.execute(organization.insert().values(
+                id=org_id, name=name.strip(), url_key=key, created_at=ts, updated_at=ts,
+            ))
+            conn.execute(user.insert().values(
+                id=profile_id, organization_id=org_id, name=actor.get("name"),
+                display_name=actor.get("display_name") or actor.get("name"),
+                email=actor.get("email"), active=True, admin=True,
+                timezone=actor.get("timezone") or "UTC", created_at=ts, updated_at=ts,
+            ))
+            conn.execute(organization_membership.insert().values(
+                id=new_id(), identity_id=member[0], organization_id=org_id,
+                profile_user_id=profile_id, active=True, created_at=ts,
+            ))
+        return {"id": org_id, "name": name.strip(), "urlKey": key,
+                "_profile_user_id": profile_id, "_identity_id": member[0]}
+
+    # --------------------------------------------------------------- teams
+    def team_create(self, org_id: str, viewer_id: str, inp: dict) -> str:
+        name, key = inp.get("name"), inp.get("key")
+        if not isinstance(name, str) or not name.strip():
+            raise GraphQLError("Team name is required", extensions={"code": "BAD_USER_INPUT", "field": "name"})
+        if not isinstance(key, str) or not key.strip() or not key.strip().isalnum():
+            raise GraphQLError("Team key must be alphanumeric", extensions={"code": "BAD_USER_INPUT", "field": "key"})
+        key = key.strip().upper()
+        with self.engine.begin() as conn:
+            admin = conn.execute(select(user.c.id).where(and_(
+                user.c.id == viewer_id, user.c.organization_id == org_id,
+                user.c.active.is_(True), user.c.archived_at.is_(None), user.c.admin.is_(True)
+            ))).first()
+            if not admin:
+                raise GraphQLError("Admin access required", extensions={"code": "FORBIDDEN"})
+            if conn.execute(select(team.c.id).where(and_(
+                team.c.organization_id == org_id, team.c.key == key
+            ))).first():
+                raise GraphQLError("Team key already exists", extensions={"code": "BAD_USER_INPUT", "field": "key"})
+            ts, tid = now_iso(), new_id()
+            conn.execute(team.insert().values(
+                id=tid, organization_id=org_id, name=name.strip(), key=key,
+                description=inp.get("description"), color=inp.get("color"), icon=inp.get("icon"),
+                private=bool(inp.get("private", False)), timezone=inp.get("timezone") or "UTC",
+                issue_counter=0, created_at=ts, updated_at=ts,
+            ))
+            default_state_id = seed_states_for_team(conn, org_id, tid)
+            conn.execute(team.update().where(team.c.id == tid).values(
+                default_state_id=default_state_id
+            ))
+            conn.execute(team_member.insert().values(team_id=tid, user_id=viewer_id))
+            return tid
+
+    def enable_team_cadence(self, org_id: str, team_id: str, weekday: int, *, now=None) -> dict:
+        """Enable once and reconcile the fixed one-week, two-upcoming policy."""
+        from datetime import datetime, timezone
+        from cliniar_server.cadence import reconcile_team_cadence, validate_timezone
+        if type(weekday) is not int or weekday not in range(7):
+            raise ValueError("Choose a weekday from Monday (0) through Sunday (6).")
+        instant = now or datetime.now(timezone.utc)
+        if instant.tzinfo is None:
+            raise ValueError("Cadence clock must be timezone-aware.")
+        with self.engine.begin() as conn:
+            if conn.dialect.name == "sqlite":
+                conn.exec_driver_sql("BEGIN IMMEDIATE")
+            row = conn.execute(select(team).where(and_(team.c.organization_id == org_id,
+                team.c.id == team_id, team.c.archived_at.is_(None))).with_for_update()).mappings().first()
+            if not row:
+                raise ValueError("Team not found in this workspace.")
+            if row["cadence_enabled"]:
+                if row["cadence_weekday"] != weekday:
+                    raise ValueError("Changing a cycle schedule is not supported yet.")
+                return reconcile_team_cadence(conn, org_id, row, instant)
+            existing = conn.execute(select(cycle.c.id).where(and_(cycle.c.organization_id == org_id,
+                cycle.c.team_id == team_id, cycle.c.archived_at.is_(None)))).first()
+            if existing:
+                raise ValueError("This team already has cycles; reconcile existing cycles before enabling cadence.")
+            validate_timezone(row.get("timezone") or "UTC")
+            updated = conn.execute(team.update().where(and_(team.c.id == team_id,
+                team.c.organization_id == org_id, team.c.cadence_enabled.is_(False)))
+                .values(cadence_enabled=True, cadence_weekday=weekday,
+                        cadence_anchor_at=instant.astimezone(timezone.utc).isoformat(),
+                        cadence_policy_version=1, updated_at=now_iso()))
+            if updated.rowcount != 1:
+                raise ValueError("Cycle settings changed; reload before retrying.")
+            fresh = conn.execute(select(team).where(team.c.id == team_id)).mappings().one()
+            return reconcile_team_cadence(conn, org_id, fresh, instant)
+
+    def reconcile_team_cadence(self, org_id: str, team_id: str, *, now=None) -> dict:
+        from datetime import datetime, timezone
+        from cliniar_server.cadence import reconcile_team_cadence
+        instant = now or datetime.now(timezone.utc)
+        with self.engine.begin() as conn:
+            if conn.dialect.name == "sqlite":
+                conn.exec_driver_sql("BEGIN IMMEDIATE")
+            row = conn.execute(select(team).where(and_(team.c.organization_id == org_id,
+                team.c.id == team_id, team.c.archived_at.is_(None))).with_for_update()).mappings().first()
+            if not row:
+                raise ValueError("Team not found in this workspace.")
+            return reconcile_team_cadence(conn, org_id, row, instant)
+
+    def initiative_create(self, org_id: str, actor_id: str, inp: dict) -> str:
+        name, status, priority = str(inp.get("name", "")).strip(), inp.get("status", "planned"), inp.get("priority", 0)
+        if not name or status not in {"active", "planned", "completed", "canceled"} or not isinstance(priority, int) or priority not in range(0, 5):
+            raise ValueError("Invalid initiative name, status, or priority.")
+        ident, ts, owner_id = new_id(), now_iso(), inp.get("ownerId")
+        with self.engine.begin() as conn:
+            if owner_id and not conn.execute(select(user.c.id).where(and_(user.c.id == owner_id, user.c.organization_id == org_id))).first():
+                raise ValueError("Owner must belong to the current organization.")
+            conn.execute(initiative.insert().values(id=ident, organization_id=org_id, name=name, summary=inp.get("summary"), status=status, priority=priority, owner_id=owner_id, creator_id=actor_id, target_date=inp.get("targetDate"), created_at=ts, updated_at=ts))
+            self._initiative_projects(conn, org_id, ident, inp.get("projectIds", []))
+        return ident
+
+    @staticmethod
+    def _initiative_projects(conn, org_id: str, ident: str, project_ids: list[str]) -> None:
+        for pid in dict.fromkeys(project_ids):
+            if not conn.execute(select(project.c.id).where(and_(project.c.id == pid, project.c.organization_id == org_id, project.c.archived_at.is_(None)))).first():
+                raise ValueError("Project must belong to the current organization.")
+            conn.execute(initiative_project.insert().values(organization_id=org_id, initiative_id=ident, project_id=pid))
+
+    def initiative_update(self, org_id: str, ident: str, inp: dict) -> bool:
+        fields = {"name", "summary", "status", "priority", "ownerId", "targetDate"}
+        values = {k: v for k, v in inp.items() if k in fields}
+        if "name" in values:
+            values["name"] = str(values["name"]).strip()
+            if not values["name"]: raise ValueError("Initiative name must not be empty.")
+        if "status" in values and values["status"] not in {"active", "planned", "completed", "canceled"}: raise ValueError("Invalid initiative status.")
+        if "priority" in values and (not isinstance(values["priority"], int) or values["priority"] not in range(0, 5)): raise ValueError("Invalid initiative priority.")
+        if "targetDate" in values: values["target_date"] = values.pop("targetDate")
+        if "ownerId" in values:
+            owner = values.pop("ownerId")
+            if owner:
+                with self.engine.connect() as owner_conn:
+                    if not owner_conn.execute(select(user.c.id).where(and_(user.c.id == owner, user.c.organization_id == org_id))).first():
+                        raise ValueError("Owner must belong to the current organization.")
+            values["owner_id"] = owner
+        with self.engine.begin() as conn:
+            exists = conn.execute(select(initiative.c.id).where(and_(initiative.c.id == ident, initiative.c.organization_id == org_id, initiative.c.archived_at.is_(None)))).first()
+            if not exists: return False
+            if "projectIds" in inp:
+                conn.execute(initiative_project.delete().where(and_(initiative_project.c.organization_id == org_id, initiative_project.c.initiative_id == ident)))
+                self._initiative_projects(conn, org_id, ident, inp["projectIds"])
+            values["updated_at"] = now_iso()
+            conn.execute(initiative.update().where(and_(initiative.c.id == ident, initiative.c.organization_id == org_id)).values(**values))
+        return True
+
+    def initiative_archive(self, org_id: str, ident: str) -> bool:
+        with self.engine.begin() as conn:
+            result = conn.execute(initiative.update().where(and_(initiative.c.id == ident, initiative.c.organization_id == org_id, initiative.c.archived_at.is_(None))).values(archived_at=now_iso(), updated_at=now_iso()))
+            return result.rowcount > 0
+
+    @staticmethod
+    def _record_activity(conn, org_id, issue_id, actor_id, event_type, changes, ts):
+        conn.execute(issue_activity.insert().values(
+            id=new_id(), organization_id=org_id, issue_id=issue_id,
+            actor_id=actor_id, event_type=event_type,
+            changes=json.dumps(changes, separators=(",", ":")) if changes else None,
+            created_at=ts,
+        ))
+
+    @staticmethod
+    def _notify_issue_recipients(conn, org_id, issue_id, actor_id, recipients, kind, ts):
+        for recipient_id in set(recipients) - {actor_id, None}:
+            conn.execute(inbox_notification.insert().values(
+                id=new_id(), organization_id=org_id, recipient_id=recipient_id,
+                issue_id=issue_id, actor_id=actor_id, kind=kind, created_at=ts,
+            ))
+
     # -------------------------------------------------------------- issues
     def issue_create(self, org_id: str, viewer_id: str, inp: dict) -> str | None:
         with self.engine.begin() as conn:
@@ -196,9 +398,13 @@ class Writer:
             self._apply_state_ts(conn, org_id, iid, state_id, ts)
             for lid in (inp.get("labelIds") or []):
                 conn.execute(issue_label_link.insert().values(issue_id=iid, label_id=lid))
+            self._record_activity(conn, org_id, iid, viewer_id, "issueCreated", {"title": inp["title"]}, ts)
+            self._notify_issue_recipients(
+                conn, org_id, iid, viewer_id, [inp.get("assigneeId"), viewer_id], "issueCreated", ts
+            )
             return iid
 
-    def issue_update(self, org_id: str, ident: str, inp: dict) -> str | None:
+    def issue_update(self, org_id: str, ident: str, inp: dict, actor_id: str | None = None) -> str | None:
         with self.engine.begin() as conn:
             row = conn.execute(select(issue).where(and_(
                 issue.c.organization_id == org_id,
@@ -226,6 +432,10 @@ class Writer:
                 values["priority_label"] = PRIORITY_LABELS.get(p, "No priority")
             if "stateId" in inp:
                 values["state_id"] = inp["stateId"]
+            changes = {}
+            for field, column in {"title": "title", "description": "description", "priority": "priority", "stateId": "state_id", "assigneeId": "assignee_id"}.items():
+                if field in inp and issue_row.get(column) != values.get(column):
+                    changes[field] = {"from": issue_row.get(column), "to": values.get(column)}
             conn.execute(issue.update().where(issue.c.id == iid).values(**values))
             if "stateId" in inp:
                 self._apply_state_ts(conn, org_id, iid, inp["stateId"], ts)
@@ -233,6 +443,13 @@ class Writer:
                 conn.execute(issue_label_link.delete().where(issue_label_link.c.issue_id == iid))
                 for lid in (inp.get("labelIds") or []):
                     conn.execute(issue_label_link.insert().values(issue_id=iid, label_id=lid))
+            if changes:
+                self._record_activity(conn, org_id, iid, actor_id, "issueUpdated", changes, ts)
+                self._notify_issue_recipients(
+                    conn, org_id, iid, actor_id,
+                    [issue_row.get("assignee_id"), values.get("assignee_id", issue_row.get("assignee_id")),
+                     issue_row.get("creator_id")], "issueUpdated", ts,
+                )
             return iid
 
     def _apply_state_ts(self, conn, org_id, iid, state_id, ts):
@@ -260,12 +477,12 @@ class Writer:
             conn.execute(issue.update().where(issue.c.id == iid).values(**vals))
 
     def issue_archive(self, org_id: str, ident: str) -> bool:
-        return self._soft_delete(issue, org_id, ident, by_identifier=True)
+        return self._soft_delete(issue, org_id, ident, by_identifier=True, event_type="issueArchived")
 
     def issue_delete(self, org_id: str, ident: str) -> bool:
         return self._soft_delete(issue, org_id, ident, by_identifier=True)
 
-    def _soft_delete(self, table, org_id, ident, by_identifier=False) -> bool:
+    def _soft_delete(self, table, org_id, ident, by_identifier=False, event_type=None) -> bool:
         with self.engine.begin() as conn:
             cond = (table.c.id == ident)
             if by_identifier and "identifier" in table.c:
@@ -274,7 +491,10 @@ class Writer:
                 table.c.organization_id == org_id, cond))).first()
             if not row:
                 return False
-            conn.execute(table.update().where(table.c.id == row[0]).values(archived_at=now_iso()))
+            ts = now_iso()
+            conn.execute(table.update().where(table.c.id == row[0]).values(archived_at=ts))
+            if event_type:
+                self._record_activity(conn, org_id, row[0], None, event_type, None, ts)
             return True
 
     # -------------------------------------------------------------- comments
@@ -292,6 +512,7 @@ class Writer:
                 id=cid, organization_id=org_id, issue_id=irow["id"], body=inp["body"],
                 user_id=viewer_id, url=f"{irow.get('url')}#comment-{cid[:8]}",
                 created_at=ts, updated_at=ts))
+            self._record_activity(conn, org_id, irow["id"], viewer_id, "commentCreated", {"commentId": cid}, ts)
             return cid
 
     def comment_update(self, org_id: str, cid: str, inp: dict) -> str | None:
@@ -304,6 +525,8 @@ class Writer:
             if "body" in inp:
                 vals["body"] = inp["body"]
             conn.execute(comment.update().where(comment.c.id == cid).values(**vals))
+            issue_id = conn.execute(select(comment.c.issue_id).where(comment.c.id == cid)).scalar_one()
+            self._record_activity(conn, org_id, issue_id, None, "commentUpdated", {"commentId": cid}, vals["updated_at"])
             return cid
 
     def comment_delete(self, org_id: str, cid: str) -> bool:
@@ -410,6 +633,27 @@ class Writer:
             for team_id in team_ids:
                 conn.execute(project_team.insert().values(project_id=pid, team_id=team_id))
             return pid
+
+    def project_update_create(self, org_id: str, pid: str, actor_id: str, inp: dict) -> str | None:
+        body = inp.get("body")
+        if not isinstance(body, str) or not body.strip():
+            raise GraphQLError("Project update body must not be empty.", extensions={"code": "BAD_USER_INPUT", "field": "body"})
+        with self.engine.begin() as conn:
+            row = conn.execute(select(project).where(and_(
+                project.c.organization_id == org_id,
+                project.c.id == pid,
+                project.c.archived_at.is_(None),
+            ))).mappings().first()
+            if not row:
+                return None
+            update_id = new_id()
+            ts = now_iso()
+            conn.execute(project_update.insert().values(
+                id=update_id, organization_id=org_id, project_id=pid,
+                actor_id=actor_id, body=body, status=inp.get("status"),
+                progress=row.get("progress"), created_at=ts,
+            ))
+            return update_id
 
     def project_update(self, org_id: str, pid: str, inp: dict) -> str | None:
         with self.engine.begin() as conn:

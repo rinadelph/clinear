@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "at": "2026-10-03T08:19:46.576Z",
+  "event": "memory-candidate-saved",
+  "recordId": "d90f6a7b-bdc2-4d44-9d05-e0a4d652ead9",
+  "revision": "011d0e945b88ba8d55f3984cf9f884dd",
+  "scope": "worktree",
+  "evidenceIds": [
+    "4343fb23",
+    "74fcb2f4",
+    "2390a96e"
+  ]
+}

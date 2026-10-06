@@ -49,3 +49,8 @@ id_ed25519*
 schema/linear-schema.json
 clinear-debug.log
 .swarm/
+vendor/linear-kit/
+
+# Local runtime artifacts
+frontend/node_modules/
+.pi/agent-sessions/

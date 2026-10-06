@@ -40,7 +40,9 @@ def test_server_module_entry_points(module: str) -> None:
         capture_output=True,
         text=True,
     )
-    assert result.stdout.strip() == "cliniar-serve 0.7.0"
+    from cliniar import __version__
+
+    assert result.stdout.strip() == f"cliniar-serve {__version__}"
 
 
 @pytest.mark.parametrize(

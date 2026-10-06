@@ -2,8 +2,8 @@
 
 > Guide for humans and AI agents who modify this codebase.
 
-Cliniar is generic, self-hosted, offline-first, agent-native work management
-with a Linear-compatible GraphQL interface. Do not encode a particular
+Cliniar is a standalone, generic, self-hosted, offline-first, agent-native
+work-management product with a Linear-compatible GraphQL interface. Do not encode a particular
 organization, repository owner, or deployment as a product default. New work
 uses `cliniar`, `cliniar-mcp`, `cliniar-serve`, `CLINIAR_*`, and `cliniar`
 config/data paths. The old commands, `CLINEAR_*`, and `clinear` paths are
@@ -82,7 +82,7 @@ User CLI input
         └─► global flags resolved → cli_state.CLIState
               └─► subcommand handler (cliniar/commands/*.py)
                     └─► cliniar.client.LinearClient.execute_as()
-                          ├─► httpx POST to api.linear.app/graphql
+                          ├─► httpx POST to the configured self-hosted /graphql endpoint
                           ├─► JSON → dict
                           └─► dict → Pydantic model (validation)
                                 └─► cliniar.output.render(model, fmt)
@@ -172,12 +172,14 @@ git commit -m "fix(issue): handle null state in IssueSearchResult"
 
 ## Testing
 
-### E2E (live API — primary suite)
+### E2E (configured backend — primary suite)
 
-`scripts/e2e-test.sh` exercises every command against the real Linear API.
+`scripts/e2e-test.sh` exercises every command against the configured
+Linear-compatible endpoint. For standalone product work, prefer the local
+backend suite below so verification does not depend on a hosted service.
 
 ```bash
-export LINEAR_TOKEN="lin_api_..."
+export LINEAR_TOKEN="lin_api_..."  # issued by cliniar-serve seed or another configured backend
 bash scripts/e2e-test.sh
 ```
 
@@ -331,7 +333,7 @@ It also blocks these file types entirely:
 2. Linear API errors will be in the error message verbatim — look for `GRAPHQL_VALIDATION_FAILED` (your query is wrong) vs. `AUTHENTICATION_ERROR` (token issue).
 3. Pydantic validation errors mean the response shape changed or the model is wrong. Run with `--verbose` to see the raw response.
 4. `cliniar raw query 'query { ... }'` is your friend — bypass our models, talk directly to Linear's GraphQL.
-5. Re-fetch the schema: `curl -X POST https://api.linear.app/graphql -H "Authorization: $LINEAR_TOKEN" -d '<introspection query>'`. Update fragments/models as needed.
+5. Re-fetch the schema from the configured backend (for example, `http://127.0.0.1:8787/graphql`) with `curl`, rather than assuming a hosted endpoint. Update fragments/models as needed.
 
 ---
 

@@ -1,0 +1,26 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-cliniar}
+      POSTGRES_USER: ${POSTGRES_USER:-cliniar}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    volumes:
+      - cliniar-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  app:
+    build: .
+    environment:
+      CLINIAR_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-cliniar}:${POSTGRES_PASSWORD:-change-me}@db:5432/${POSTGRES_DB:-cliniar}
+    ports:
+      - "${CLINIAR_PORT:-8787}:8787"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+volumes:
+  cliniar-postgres:

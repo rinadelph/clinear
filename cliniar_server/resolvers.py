@@ -6,6 +6,8 @@ FastAPI middleware in app.py. Every resolver reads ctx and stays org-scoped.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import base64
+import json
 
 from ariadne import (
     MutationType,
@@ -14,14 +16,19 @@ from ariadne import (
     ScalarType,
     make_executable_schema,
 )
-
 query = QueryType()
 mutation = MutationType()
+Initiative = ObjectType("Initiative")
 
 # Object types needing custom field resolvers
 Team = ObjectType("Team")
+Initiative.set_field("owner", lambda obj, info: info.context["store"].get_user(info.context["org_id"], obj.get("_owner_id")) if obj.get("_owner_id") else None)
+Initiative.set_field("creator", lambda obj, info: info.context["store"].get_user(info.context["org_id"], obj.get("_creator_id")) if obj.get("_creator_id") else None)
 Issue = ObjectType("Issue")
+IssueActivity = ObjectType("IssueActivity")
+MyIssueActivity = ObjectType("MyIssueActivity")
 Project = ObjectType("Project")
+ProjectUpdate = ObjectType("ProjectUpdate")
 Comment = ObjectType("Comment")
 WorkflowState = ObjectType("WorkflowState")
 Cycle = ObjectType("Cycle")
@@ -62,11 +69,145 @@ def _conn(nodes: list) -> dict:
     }
 
 
+def _issue_cursor(node: dict, order_by: str) -> str:
+    value = node.get("updatedAt" if order_by == "updatedAt" else "createdAt")
+    payload = json.dumps([value, node["id"]], separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+
+
+def _decode_issue_cursor(cursor: str | None):
+    if cursor is None:
+        return None
+    try:
+        raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))
+        value = json.loads(raw)
+        if not isinstance(value, list) or len(value) != 2 or not all(isinstance(part, str) and part for part in value):
+            raise ValueError
+        return value[0], value[1]
+    except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Invalid issue cursor.") from exc
+
+
+def _activity_cursor(row):
+    raw = json.dumps([row["created_at"], row["id"]], separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def _decode_activity_cursor(cursor):
+    if not cursor:
+        return None
+    try:
+        value = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
+        if not isinstance(value, list) or len(value) != 2 or not all(isinstance(x, str) for x in value):
+            raise ValueError
+        return value
+    except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Invalid activity cursor.") from exc
+
+
+def _project_update_cursor(row):
+    raw = json.dumps([row["created_at"], row["id"]], separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def _decode_project_update_cursor(cursor):
+    if cursor is None:
+        return None
+    try:
+        value = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
+        if not isinstance(value, list) or len(value) != 2 or not all(isinstance(x, str) and x for x in value):
+            raise ValueError
+        return value
+    except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Invalid project update cursor.") from exc
+
+
 # ----------------------------------------------------------------- Query
+@query.field("inboxNotifications")
+def r_inbox_notifications(_, info, first=50, after=None, unreadOnly=False, archived=False):
+    store, _w, org, uid = _ctx(info)
+    if first < 0:
+        raise ValueError("first must be non-negative.")
+    cursor = _decode_activity_cursor(after)
+    rows = store.inbox_notifications(org, uid, cursor, first + 1,
+                                     unread_only=unreadOnly, archived=archived)
+    nodes = [dict(row, createdAt=row["created_at"], readAt=row["read_at"],
+                  archivedAt=row["archived_at"], _actor_id=row["actor_id"],
+                  _issue_id=row["issue_id"]) for row in rows[:first]]
+    return {"nodes": nodes, "pageInfo": {
+        "hasNextPage": len(rows) > first, "hasPreviousPage": after is not None,
+        "startCursor": _activity_cursor(nodes[0]) if nodes else None,
+        "endCursor": _activity_cursor(nodes[-1]) if nodes else None,
+    }}
+
+
+@query.field("inboxUnreadCount")
+def r_inbox_unread_count(_, info):
+    store, _w, org, uid = _ctx(info)
+    return store.inbox_unread_count(org, uid)
+
+
+@mutation.field("notificationMarkRead")
+def m_notification_mark_read(_, info, id):
+    store, _w, org, uid = _ctx(info)
+    return store.inbox_mark(org, uid, id, "read_at")
+
+
+@mutation.field("notificationArchive")
+def m_notification_archive(_, info, id):
+    store, _w, org, uid = _ctx(info)
+    return store.inbox_mark(org, uid, id, "archived_at")
+
+
+@mutation.field("notificationMarkAllRead")
+def m_notification_mark_all_read(_, info):
+    store, _w, org, uid = _ctx(info)
+    return store.inbox_mark_all_read(org, uid)
+
+
+InboxNotification = ObjectType("InboxNotification")
+
+
+@InboxNotification.field("issue")
+def inbox_issue(obj, info):
+    store, _w, org, _uid = _ctx(info)
+    return store.issue_by_id_or_identifier(org, obj["_issue_id"])
+
+
+@InboxNotification.field("actor")
+def inbox_actor(obj, info):
+    store, _w, org, uid = _ctx(info)
+    return store.ser_user(store.get_user(org, obj["_actor_id"]), uid) if obj.get("_actor_id") else None
+
+
 @query.field("viewer")
 def r_viewer(_, info):
     store, _w, org, uid = _ctx(info)
     return store.viewer(org, uid)
+
+
+@query.field("myWorkspaces")
+def r_my_workspaces(_, info):
+    store, _w, org, uid = _ctx(info)
+    identity_id = info.context.get("identity_id")
+    if not identity_id:
+        membership = store.membership_for_profile(org, uid)
+        identity_id = membership.get("identity_id") if membership else None
+    if not identity_id:
+        return []
+    return store.identity_workspaces(identity_id)
+
+
+@query.field("organizationMembers")
+def r_organization_members(_, info, first=100):
+    store, _w, org, uid = _ctx(info)
+    return _conn([store.ser_user(member, uid) for member in store.organization_members(org)[:first]])
+
+
+@query.field("workspace")
+def r_workspace(_, info):
+    store, _w, org, _uid = _ctx(info)
+    return store.workspace(org)
 
 
 @query.field("teams")
@@ -92,8 +233,22 @@ def r_team(_, info, id):
 @query.field("issues")
 def r_issues(_, info, filter=None, first=50, after=None, orderBy="updatedAt"):  # noqa: N803
     store, _w, org, uid = _ctx(info)
-    nodes = store.issues(org, uid, filter, order_by=orderBy or "updatedAt")
-    return _conn(nodes[:first])
+    order_by = orderBy or "updatedAt"
+    if order_by not in ("updatedAt", "createdAt"):
+        raise ValueError("Unsupported issue ordering.")
+    if first < 0:
+        raise ValueError("first must be non-negative.")
+    cursor = _decode_issue_cursor(after)
+    rows = store.issues(org, uid, filter, order_by=order_by, after=cursor, limit=first + 1)
+    nodes = rows[:first]
+    result = _conn(nodes)
+    result["pageInfo"].update({
+        "hasNextPage": len(rows) > first,
+        "hasPreviousPage": after is not None,
+        "startCursor": _issue_cursor(nodes[0], order_by) if nodes else None,
+        "endCursor": _issue_cursor(nodes[-1], order_by) if nodes else None,
+    })
+    return result
 
 
 @query.field("issue")
@@ -105,7 +260,54 @@ def r_issue(_, info, id):
 @query.field("projects")
 def r_projects(_, info, filter=None, first=50, after=None):
     store, _w, org, _uid = _ctx(info)
-    return _conn(store.projects(org, filter)[:first])
+    if first < 0:
+        raise ValueError("first must be non-negative.")
+    cursor = _decode_project_update_cursor(after)
+    rows = store.projects(org, filter, after=cursor, limit=first + 1)
+    nodes = rows[:first]
+    result = _conn(nodes)
+    result["pageInfo"].update({
+        "hasNextPage": len(rows) > first,
+        "hasPreviousPage": after is not None,
+        "startCursor": _project_update_cursor({"created_at": nodes[0]["createdAt"], "id": nodes[0]["id"]}) if nodes else None,
+        "endCursor": _project_update_cursor({"created_at": nodes[-1]["createdAt"], "id": nodes[-1]["id"]}) if nodes else None,
+    })
+    return result
+
+@query.field("initiatives")
+def r_initiatives(_, info, first=50, after=None, status=None):
+    store, _w, org, _uid = _ctx(info)
+    if first < 0: raise ValueError("first must be non-negative.")
+    cursor = _decode_project_update_cursor(after)
+    rows = store.initiatives(org, after=cursor, status=status, limit=first + 1)
+    nodes = rows[:first]
+    result = _conn(nodes)
+    result["pageInfo"].update({"hasNextPage": len(rows) > first, "hasPreviousPage": after is not None, "startCursor": _project_update_cursor({"created_at": nodes[0]["createdAt"], "id": nodes[0]["id"]}) if nodes else None, "endCursor": _project_update_cursor({"created_at": nodes[-1]["createdAt"], "id": nodes[-1]["id"]}) if nodes else None})
+    return result
+
+@query.field("initiative")
+def r_initiative(_, info, id):
+    store, _w, org, _uid = _ctx(info)
+    return store.initiative_by_id(org, id)
+
+
+@query.field("projectUpdates")
+def r_project_updates(_, info, first=50, after=None, filter=None):
+    store, _w, org, _uid = _ctx(info)
+    if first < 0:
+        raise ValueError("first must be non-negative.")
+    project_filter = (filter or {}).get("project") or {}
+    project_id = (project_filter.get("id") or {}).get("eq")
+    cursor = _decode_project_update_cursor(after)
+    rows = store.project_updates(org, after=cursor, project_id=project_id, limit=first + 1)
+    nodes = rows[:first]
+    result = _conn(nodes)
+    result["pageInfo"].update({
+        "hasNextPage": len(rows) > first, "hasPreviousPage": after is not None,
+        "startCursor": _project_update_cursor(nodes[0]) if nodes else None,
+        "endCursor": _project_update_cursor(nodes[-1]) if nodes else None,
+    })
+    return result
 
 
 @query.field("project")
@@ -122,8 +324,31 @@ def r_workflow_states(_, info, filter=None, first=100, after=None):
 
 @query.field("cycles")
 def r_cycles(_, info, filter=None, first=100, after=None):
-    store, _w, org, _uid = _ctx(info)
+    store, writer, org, _uid = _ctx(info)
+    if filter and "team" in filter and "id" in filter["team"] and "eq" in filter["team"]["id"]:
+        writer.reconcile_team_cadence(org, filter["team"]["id"]["eq"])
     return _conn(store.cycles(org, filter)[:first])
+
+
+@query.field("teamCycleCadence")
+def r_team_cycle_cadence(_, info, teamId):
+    store, writer, org, _uid = _ctx(info)
+    return writer.reconcile_team_cadence(org, teamId)
+
+
+@mutation.field("teamCycleCadenceEnable")
+def m_team_cycle_cadence_enable(_, info, teamId, weekday):
+    store, writer, org, uid = _ctx(info)
+    actor = store.get_user(org, uid)
+    if not actor or not actor.get("admin"):
+        raise ValueError("Only workspace admins can enable team cycles.")
+    return writer.enable_team_cadence(org, teamId, weekday)
+
+
+@query.field("cycle")
+def r_cycle(_, info, id):
+    store, _w, org, _uid = _ctx(info)
+    return store.cycle_by_id(org, id)
 
 
 @query.field("issueLabels")
@@ -170,7 +395,8 @@ def t_members(obj, info, first=100):
 
 @Team.field("cycles")
 def t_cycles(obj, info, first=50):
-    store, _w, org, _uid = _ctx(info)
+    store, writer, org, _uid = _ctx(info)
+    writer.reconcile_team_cadence(org, obj["id"])
     return _conn(store.team_cycles(org, obj["id"])[:first])
 
 
@@ -180,8 +406,8 @@ def t_active_cycle(obj, info):
     cid = obj.get("_active_cycle_id")
     if not cid:
         return None
-    cycles = store.team_cycles(org, obj["id"])
-    return next((c for c in cycles if c["id"] == cid), None)
+    status = info.context["writer"].reconcile_team_cadence(org, obj["id"])
+    return status["activeCycle"] if status["enabled"] else next((c for c in store.team_cycles(org, obj["id"]) if c["id"] == cid), None)
 
 
 # ----------------------------------------------------------------- State/cycle fields
@@ -268,11 +494,71 @@ def i_comments(obj, info, first=50):
     return _conn(store.comments_for(org, obj["id"])[:first])
 
 
+@query.field("myIssueActivity")
+def r_my_issue_activity(_, info, first=50, after=None):
+    store, _w, org, uid = _ctx(info)
+    if first < 0:
+        raise ValueError("first must be non-negative.")
+    cursor = _decode_activity_cursor(after)
+    rows = store.my_issue_activity(org, uid, cursor, first + 1)
+    nodes = [dict(row, eventType=row["event_type"], createdAt=row["created_at"]) for row in rows[:first]]
+    return {"nodes": nodes, "pageInfo": {
+        "hasNextPage": len(rows) > first, "hasPreviousPage": after is not None,
+        "startCursor": _activity_cursor(nodes[0]) if nodes else None,
+        "endCursor": _activity_cursor(nodes[-1]) if nodes else None,
+    }}
+
+
+@MyIssueActivity.field("issue")
+def mia_issue(obj, info):
+    store, _w, org, _uid = _ctx(info)
+    return store.issue_by_id_or_identifier(org, obj["issue_id"])
+
+
+@MyIssueActivity.field("actor")
+def mia_actor(obj, info):
+    store, _w, org, uid = _ctx(info)
+    return store.ser_user(store.get_user(org, obj["actor_id"]), uid) if obj.get("actor_id") else None
+
+
+@Issue.field("activity")
+def i_activity(obj, info, first=50, after=None):
+    store, _w, org, _uid = _ctx(info)
+    if first < 0:
+        raise ValueError("first must be non-negative.")
+    cursor = _decode_activity_cursor(after)
+    rows = store.issue_activity_for(org, obj["id"], cursor, first + 1)
+    nodes = [dict(row, eventType=row["event_type"], createdAt=row["created_at"]) for row in rows[:first]]
+    return {"nodes": nodes, "pageInfo": {
+        "hasNextPage": len(rows) > first, "hasPreviousPage": after is not None,
+        "startCursor": _activity_cursor(nodes[0]) if nodes else None,
+        "endCursor": _activity_cursor(nodes[-1]) if nodes else None,
+    }}
+
+
+@IssueActivity.field("actor")
+def ia_actor(obj, info):
+    store, _w, org, _uid = _ctx(info)
+    return store.ser_user(store.get_user(org, obj["actor_id"]), obj["actor_id"]) if obj.get("actor_id") else None
+
+
 # ----------------------------------------------------------------- Project fields
 @Project.field("lead")
 def p_lead(obj, info):
     store, _w, org, uid = _ctx(info)
     return store.ser_user(store.get_user(org, obj["_lead_id"]), uid) if obj.get("_lead_id") else None
+
+
+@ProjectUpdate.field("project")
+def pu_project(obj, info):
+    store, _w, org, _uid = _ctx(info)
+    return store.project_update_project(org, obj["_project_id"])
+
+
+@ProjectUpdate.field("actor")
+def pu_actor(obj, info):
+    store, _w, org, uid = _ctx(info)
+    return store.ser_user(store.get_user(org, obj["_actor_id"]), uid) if obj.get("_actor_id") else None
 
 
 @Project.field("creator")
@@ -301,6 +587,99 @@ def c_user(obj, info):
 
 
 # ----------------------------------------------------------------- Mutations
+@mutation.field("workspaceCreate")
+def m_workspace_create(_, info, input):
+    store, writer, org, uid = _ctx(info)
+    identity_id = info.context.get("identity_id")
+    if not identity_id:
+        membership = store.membership_for_profile(org, uid)
+        identity_id = membership.get("identity_id") if membership else None
+    if not identity_id:
+        raise ValueError("Workspace identity is unavailable")
+    created = writer.workspace_create(org, uid, input)
+    created.pop("_identity_id", None)
+    info.context["switch_target"] = {
+        "user_id": created.pop("_profile_user_id"),
+        "identity_id": identity_id,
+        "organization_id": created["id"],
+    }
+    return {"success": True, "organization": created}
+
+@mutation.field("teamCreate")
+def m_team_create(_, info, input):
+    store, writer, org, uid = _ctx(info)
+    tid = writer.team_create(org, uid, input)
+    row = store.team_by_id_or_key(org, tid)
+    return {"success": True, "team": store.ser_team(row)}
+
+
+@mutation.field("workspaceUpdate")
+def m_workspace_update(_, info, input):
+    store, _w, org, uid = _ctx(info)
+    actor = store.get_user(org, uid)
+    if not actor or not actor.get("admin"):
+        return {"success": False, "organization": None}
+    updated = store.update_workspace(org, input)
+    return {"success": bool(updated), "organization": updated}
+
+
+@mutation.field("workspaceSwitch")
+def m_workspace_switch(_, info, organizationId):
+    store, _w, org, uid = _ctx(info)
+    if not info.context.get("browser_session"):
+        return {"success": False, "organization": None}
+    member = store.membership_for_profile(org, uid)
+    target = store.switch_membership(member.get("identity_id") if member else None, organizationId)
+    if not target:
+        return {"success": False, "organization": None}
+    info.context["switch_target"] = target
+    return {"success": True, "organization": target["organization"]}
+
+
+@mutation.field("membershipInvitationCreate")
+def m_membership_invitation_create(_, info, userId):
+    store, _w, org, uid = _ctx(info)
+    actor = store.get_user(org, uid)
+    target = store.get_user(org, userId)
+    if not actor or not actor.get("admin") or not target:
+        return {"success": False, "user": None, "inviteCode": None}
+    code = store.create_membership_invitation(org, userId, uid)
+    return {"success": bool(code), "user": store.ser_user(store.get_user(org, userId), uid),
+            "inviteCode": code}
+
+
+@mutation.field("membershipInvitationAccept")
+def m_membership_invitation_accept(_, info, code, inviteePassword):
+    store, _w, _org, uid = _ctx(info)
+    identity_id = info.context.get("identity_id")
+    organization = store.accept_membership_invitation(identity_id, code, inviteePassword) if identity_id else None
+    return {"success": bool(organization), "organization": organization}
+
+
+@mutation.field("memberRoleUpdate")
+def m_member_role_update(_, info, userId, admin):
+    store, _w, org, uid = _ctx(info)
+    actor = store.get_user(org, uid)
+    if not actor or not actor.get("admin"):
+        return {"success": False, "user": None}
+    target = store.set_member_admin_role(org, userId, admin)
+    return {"success": bool(target), "user": store.ser_user(target, uid)}
+
+
+@mutation.field("memberInvite")
+def m_member_invite(_, info, input):
+    store, _w, org, uid = _ctx(info)
+    actor = store.get_user(org, uid)
+    if not actor or not actor.get("admin"):
+        return {"success": False, "user": None, "apiKey": None}
+    created = store.invite_member(org, input.get("name", ""), input.get("email", ""),
+                                  bool(input.get("admin", False)))
+    if not created:
+        return {"success": False, "user": None, "apiKey": None}
+    user_row, api_key = created
+    return {"success": True, "user": store.ser_user(user_row, uid), "apiKey": api_key}
+
+
 @mutation.field("issueCreate")
 def m_issue_create(_, info, input):
     store, w, org, uid = _ctx(info)
@@ -313,7 +692,7 @@ def m_issue_create(_, info, input):
 @mutation.field("issueUpdate")
 def m_issue_update(_, info, id, input):
     store, w, org, _uid = _ctx(info)
-    iid = w.issue_update(org, id, input)
+    iid = w.issue_update(org, id, input, actor_id=_uid)
     if not iid:
         return {"success": False, "issue": None}
     return {"success": True, "issue": store.issue_by_id_or_identifier(org, iid)}
@@ -384,10 +763,36 @@ def m_project_update(_, info, id, input):
     return {"success": bool(pid), "project": store.project_by_id(org, pid) if pid else None}
 
 
+@mutation.field("projectUpdateCreate")
+def m_project_update_create(_, info, input):
+    store, w, org, uid = _ctx(info)
+    update_id = w.project_update_create(org, input["projectId"], uid, input)
+    rows = store.project_updates(org, project_id=input["projectId"], limit=1) if update_id else []
+    created = next((row for row in rows if row["id"] == update_id), None)
+    return {"success": bool(created), "projectUpdate": created}
+
+
 @mutation.field("projectArchive")
 def m_project_archive(_, info, id):
     _s, w, org, _uid = _ctx(info)
     return {"success": w.project_archive(org, id)}
+
+@mutation.field("initiativeCreate")
+def m_initiative_create(_, info, input):
+    store, writer, org, uid = _ctx(info)
+    ident = writer.initiative_create(org, uid, input)
+    return {"success": True, "initiative": store.initiative_by_id(org, ident)}
+
+@mutation.field("initiativeUpdate")
+def m_initiative_update(_, info, id, input):
+    store, writer, org, _uid = _ctx(info)
+    success = writer.initiative_update(org, id, input)
+    return {"success": success, "initiative": store.initiative_by_id(org, id) if success else None}
+
+@mutation.field("initiativeArchive")
+def m_initiative_archive(_, info, id):
+    _store, writer, org, _uid = _ctx(info)
+    return {"success": writer.initiative_archive(org, id)}
 
 
 @mutation.field("attachmentCreate")
@@ -416,7 +821,7 @@ def build_schema():
     from pathlib import Path
     sdl = (Path(__file__).parent / "schema.graphql").read_text()
     return make_executable_schema(
-        sdl, query, mutation, Team, Issue, Project, Comment,
+        sdl, query, mutation, Team, Initiative, Issue, IssueActivity, MyIssueActivity, Project, ProjectUpdate, Comment,
         WorkflowState, Cycle, Attachment,
-        datetime_scalar, timeless_scalar, json_scalar,
+        datetime_scalar, timeless_scalar, json_scalar, InboxNotification,
     )

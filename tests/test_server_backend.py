@@ -23,6 +23,8 @@ from cliniar_server.db import (
     cycle,
     display_database_target,
     issue,
+    global_identity,
+    identity_credential,
     make_engine,
     metadata,
     migrate,
@@ -30,6 +32,7 @@ from cliniar_server.db import (
     now_iso,
     project,
     project_team,
+    organization_membership,
     resolve_database_target,
     resolve_token_identity,
     schema_revision,
@@ -118,6 +121,39 @@ def test_migrate_upgrades_a_recorded_prior_schema(tmp_path) -> None:
         index["name"] == "uq_api_key_token_hash" and index["unique"]
         for index in indexes
     )
+
+
+def test_identity_membership_migration_preserves_duplicate_email_profiles(tmp_path) -> None:
+    engine = make_engine(tmp_path / "identity-migration.db")
+    migrate(engine)
+    first = seed_tenant(engine, org_name="First", org_url_key="identity-first",
+                        user_name="Same Person One", user_email="same@example.test", demo_issues=False)
+    second = seed_tenant(engine, org_name="Second", org_url_key="identity-second",
+                         user_name="Same Person Two", user_email="same@example.test", demo_issues=False)
+    with engine.begin() as conn:
+        organization_membership.drop(conn)
+        global_identity.drop(conn)
+        conn.execute(schema_revision.delete().where(schema_revision.c.revision >= 6))
+    with engine.begin() as conn:
+        # Simulate a revision-5 database retaining the old password hashes.
+        from cliniar_server.db import password_credential
+        for seeded in (first, second):
+            conn.execute(password_credential.insert().values(
+                user_id=seeded["user_id"], password_hash=f"legacy-hash-{seeded['user_id']}",
+                created_at=now_iso(), updated_at=now_iso()))
+    migrate(engine)
+    with engine.connect() as conn:
+        rows = conn.execute(select(organization_membership.c.identity_id,
+                                   organization_membership.c.organization_id,
+                                   organization_membership.c.profile_user_id)).all()
+        credentials = conn.execute(select(identity_credential.c.password_hash)).scalars().all()
+    assert applied_schema_revision(engine) == CURRENT_SCHEMA_REVISION
+    mapped = {row.profile_user_id: (row.identity_id, row.organization_id) for row in rows}
+    assert mapped[first["user_id"]][1] == first["org_id"]
+    assert mapped[second["user_id"]][1] == second["org_id"]
+    assert mapped[first["user_id"]][0] != mapped[second["user_id"]][0]
+    assert sorted(credentials) == sorted([
+        f"legacy-hash-{first['user_id']}", f"legacy-hash-{second['user_id']}"])
 
 
 def test_migrate_rejects_unsafe_duplicate_legacy_tokens(tmp_path) -> None:
@@ -577,6 +613,34 @@ def test_health_and_readiness(tmp_path) -> None:
     assert ready.json() == {"status": "ready"}
 
 
+def test_team_create_graphql_admin_success_and_duplicate_key(tmp_path) -> None:
+    db_path = tmp_path / "team-create.db"
+    engine = make_engine(db_path)
+    migrate(engine)
+    seeded = seed_tenant(engine, org_name="Create Team", org_url_key="create-team",
+                         user_email="create@example.test", token="create-team-token",
+                         demo_issues=False)
+    app = create_app(str(db_path), open_mode=False)
+    query = "mutation($input: TeamCreateInput!) { teamCreate(input: $input) { success team { id name key description states { nodes { name type } } } } }"
+    with TestClient(app) as client:
+        headers = {"Authorization": f"Bearer {seeded['token']}"}
+        result = client.post("/graphql", headers=headers, json={
+            "query": query,
+            "variables": {"input": {"name": "Product Team", "key": "prd", "description": "Product"}},
+        }).json()
+        payload = result["data"]["teamCreate"]
+        assert payload["success"] is True
+        assert payload["team"]["name"] == "Product Team"
+        assert payload["team"]["key"] == "PRD"
+        assert payload["team"]["states"]["nodes"]
+
+        duplicate = client.post("/graphql", headers=headers, json={
+            "query": query,
+            "variables": {"input": {"name": "Another team", "key": "prd"}},
+        }).json()
+        assert duplicate["errors"][0]["extensions"]["code"] == "BAD_USER_INPUT"
+
+
 def test_health_stays_available_when_schema_is_unmigrated(tmp_path) -> None:
     app = create_app(str(tmp_path / "unmigrated.db"), open_mode=False)
 
@@ -760,3 +824,241 @@ def test_cloverops_graphql_operation_contract(tmp_path) -> None:
             select(attachment.c.id).where(attachment.c.issue_id == created_id)
         ).scalar_one()
     verification_engine.dispose()
+
+
+def test_browser_password_session_setup_login_graphql_and_logout(tmp_path) -> None:
+    from starlette.testclient import TestClient
+
+    db_path = tmp_path / "browser-auth.db"
+    engine = make_engine(db_path)
+    migrate(engine)
+    seeded = seed_tenant(engine, org_name="Auth Workspace", org_url_key="auth-test",
+                         user_name="Browser User", user_email="browser@example.test",
+                         demo_issues=False)
+    client = TestClient(create_app(str(db_path), open_mode=False))
+    weak = client.post("/auth/setup", json={"token": seeded["token"], "password": "short"})
+    assert weak.status_code == 400
+    setup = client.post("/auth/setup", json={"token": seeded["token"], "password": "correct horse battery"})
+    assert setup.status_code == 201
+    bad = client.post("/auth/login", json={"email": "browser@example.test", "password": "wrong password"})
+    assert bad.status_code == 401
+    login = client.post("/auth/login", json={"email": "browser@example.test", "password": "correct horse battery"})
+    assert login.status_code == 200
+    assert "hoja_session" in login.cookies
+    assert "httponly" in login.headers.get("set-cookie", "").lower()
+    me = client.get("/auth/me")
+    assert me.status_code == 200
+    assert me.json()["organizationId"] == seeded["org_id"]
+    graph = client.post("/graphql", json={"query": "{ viewer { email } }"})
+    assert graph.status_code == 200
+    assert graph.json()["data"]["viewer"]["email"] == "browser@example.test"
+    logout = client.post("/auth/logout")
+    assert logout.status_code == 200
+    assert client.get("/auth/me").status_code == 401
+    assert client.post("/graphql", json={"query": "{ viewer { id } }"}).status_code == 401
+
+
+def test_browser_password_login_accepts_api_key_and_rejects_invalid_password(tmp_path) -> None:
+    from starlette.testclient import TestClient
+
+    db_path = tmp_path / "browser-api-key-login.db"
+    engine = make_engine(db_path)
+    migrate(engine)
+    seeded = seed_tenant(engine, org_name="API Key Workspace", org_url_key="api-key-login",
+                         user_name="API Key User", user_email="api-key-login@example.test",
+                         demo_issues=False)
+    client = TestClient(create_app(str(db_path), open_mode=False))
+    assert client.post("/auth/setup", json={"token": seeded["token"],
+        "password": "correct horse battery"}).status_code == 201
+
+    login = client.post("/auth/login", json={"apiKey": seeded["token"]})
+    assert login.status_code == 200
+    assert "hoja_session" in login.cookies
+    assert client.get("/auth/me").json()["organizationId"] == seeded["org_id"]
+
+    client.post("/auth/logout")
+    invalid = client.post("/auth/login", json={"apiKey": "invalid-token"})
+    assert invalid.status_code == 401
+    assert "hoja_session" not in invalid.cookies
+
+
+def test_api_key_login_skips_workspace_lookup_on_outdated_schema(tmp_path) -> None:
+    db_path = tmp_path / "browser-api-key-outdated.db"
+    engine = make_engine(db_path)
+    migrate(engine)
+    seeded = seed_tenant(engine, org_name="Outdated Workspace", org_url_key="outdated-login",
+                         user_name="API Key User", user_email="outdated@example.test",
+                         demo_issues=False)
+    organization_membership.drop(engine)
+    global_identity.drop(engine)
+    client = TestClient(create_app(str(db_path), open_mode=False))
+
+    login = client.post("/auth/login", json={"apiKey": seeded["token"]})
+    assert login.status_code == 200
+    assert "hoja_session" in login.cookies
+
+    invalid = client.post("/auth/login", json={"apiKey": "invalid-token"})
+    assert invalid.status_code == 401
+    assert "hoja_session" not in invalid.cookies
+
+    email_login = client.post("/auth/login", json={
+        "email": "outdated@example.test", "password": "irrelevant",
+    })
+    assert email_login.status_code == 503
+    assert "migrated" in email_login.json()["error"]
+
+
+def test_global_identity_can_switch_only_to_its_explicit_memberships(tmp_path) -> None:
+    db_path = tmp_path / "identity-switch.db"
+    engine = make_engine(db_path)
+    migrate(engine)
+    one = seed_tenant(engine, org_name="Switch One", org_url_key="switch-one",
+                      user_name="Shared Person One", user_email="shared-switch@example.test",
+                      demo_issues=False)
+    two = seed_tenant(engine, org_name="Switch Two", org_url_key="switch-two",
+                      user_name="Shared Person Two", user_email="shared-switch@example.test",
+                      demo_issues=False)
+    outsider = seed_tenant(engine, org_name="Outsider", org_url_key="switch-outsider",
+                           user_name="Other Person", user_email="other-switch@example.test",
+                           demo_issues=False)
+    client = TestClient(create_app(str(db_path), open_mode=False))
+    for seeded in (one, two, outsider):
+        assert client.post("/auth/setup", json={"token": seeded["token"],
+            "password": "correct horse battery"}).status_code == 201
+
+    need_choice = client.post("/auth/login", json={"email": "shared-switch@example.test",
+                              "password": "correct horse battery"})
+    assert need_choice.status_code == 409
+    available = client.post("/auth/workspaces", json={"email": "shared-switch@example.test"}).json()
+    assert {w["organizationId"] for w in available["workspaces"]} == {one["org_id"], two["org_id"]}
+    login = client.post("/auth/login", json={"email": "shared-switch@example.test",
+        "password": "correct horse battery", "organizationId": one["org_id"]})
+    assert login.status_code == 200
+    assert client.get("/auth/me").json()["organizationId"] == one["org_id"]
+
+    switched = client.post("/graphql", json={"query": "mutation($id:String!){workspaceSwitch(organizationId:$id){success organization{name}}}",
+                                                   "variables": {"id": two["org_id"]}})
+    assert switched.json()["data"]["workspaceSwitch"]["success"] is False
+    assert client.get("/auth/me").json()["organizationId"] == one["org_id"]
+    denied = client.post("/graphql", json={"query": "mutation($id:String!){workspaceSwitch(organizationId:$id){success}}",
+                                                 "variables": {"id": outsider["org_id"]}})
+    assert denied.json()["data"]["workspaceSwitch"]["success"] is False
+    assert client.get("/auth/me").json()["organizationId"] == one["org_id"]
+
+    # Explicitly add the second org profile to the same identity; an active membership enables switching.
+    from cliniar_server.db import organization_membership
+    with engine.begin() as conn:
+        identity_id = conn.execute(select(organization_membership.c.identity_id).where(
+            organization_membership.c.profile_user_id == one["user_id"])).scalar_one()
+        conn.execute(organization_membership.update().where(
+            organization_membership.c.profile_user_id == two["user_id"]).values(identity_id=identity_id))
+    allowed = client.post("/graphql", json={"query": "mutation($id:String!){workspaceSwitch(organizationId:$id){success organization{name}}}",
+                                               "variables": {"id": two["org_id"]}})
+    assert allowed.json()["data"]["workspaceSwitch"]["success"] is True
+    assert client.get("/auth/me").json()["organizationId"] == two["org_id"]
+    # API keys remain pinned to their organization even when the browser session switches.
+    api_client = TestClient(create_app(str(db_path), open_mode=False))
+    api_key = api_client.post("/graphql", headers={"Authorization": two["token"]}, json={
+        "query": "mutation($id:String!){workspaceSwitch(organizationId:$id){success}}",
+        "variables": {"id": one["org_id"]}})
+    assert api_key.json()["data"]["workspaceSwitch"]["success"] is False
+
+
+def test_cross_identity_workspace_link_requires_verified_invitation(tmp_path) -> None:
+    db_path = tmp_path / "identity-link.db"
+    engine = make_engine(db_path)
+    migrate(engine)
+    one = seed_tenant(engine, org_name="Link One", org_url_key="link-one",
+                      user_name="Person One", user_email="link@example.test", demo_issues=False)
+    two = seed_tenant(engine, org_name="Link Two", org_url_key="link-two",
+                      user_name="Person Two", user_email="link@example.test", demo_issues=False)
+    app = create_app(str(db_path), open_mode=False)
+    client_a, client_b = TestClient(app), TestClient(app)
+    assert client_a.post("/auth/setup", json={"token": one["token"], "password": "correct horse battery"}).status_code == 201
+    assert client_b.post("/auth/setup", json={"token": two["token"], "password": "another secure password"}).status_code == 201
+    assert client_a.post("/auth/login", json={"email": "link@example.test", "password": "correct horse battery",
+                                               "organizationId": one["org_id"]}).status_code == 200
+    assert client_b.post("/auth/login", json={"email": "link@example.test", "password": "another secure password",
+                                               "organizationId": two["org_id"]}).status_code == 200
+    denied = client_a.post("/graphql", json={"query": "mutation($id:String!){workspaceSwitch(organizationId:$id){success}}",
+                                             "variables": {"id": two["org_id"]}})
+    assert denied.json()["data"]["workspaceSwitch"]["success"] is False
+    create = client_b.post("/graphql", json={"query": "mutation($id:String!){membershipInvitationCreate(userId:$id){success inviteCode}}",
+                                              "variables": {"id": two["user_id"]}}).json()["data"]["membershipInvitationCreate"]
+    assert create["success"] is True
+    mismatch = client_a.post("/graphql", json={"query": "mutation($code:String!,$pw:String!){membershipInvitationAccept(code:$code,inviteePassword:$pw){success}}",
+                                                "variables": {"code": create["inviteCode"], "pw": "correct horse battery"}})
+    assert mismatch.json()["data"]["membershipInvitationAccept"]["success"] is False
+    accepted = client_a.post("/graphql", json={"query": "mutation($code:String!,$pw:String!){membershipInvitationAccept(code:$code,inviteePassword:$pw){success}}",
+                                                "variables": {"code": create["inviteCode"], "pw": "another secure password"}})
+    assert accepted.json()["data"]["membershipInvitationAccept"]["success"] is True
+    switched = client_b.post("/graphql", json={"query": "mutation($id:String!){workspaceSwitch(organizationId:$id){success}}",
+                                                "variables": {"id": one["org_id"]}})
+    assert switched.json()["data"]["workspaceSwitch"]["success"] is True
+
+
+def test_workspace_members_and_admin_update_are_org_scoped(tmp_path) -> None:
+    suffix = uuid.uuid4().hex[:8]
+    engine = make_engine(tmp_path / "workspace-admin.db")
+    migrate(engine)
+    one = seed_tenant(engine, org_name="One", org_url_key=f"one-{suffix}",
+                      user_name="Admin One", user_email=f"admin1-{suffix}@example.test",
+                      demo_issues=False)
+    two = seed_tenant(engine, org_name="Two", org_url_key=f"two-{suffix}",
+                      user_name="Admin Two", user_email=f"admin2-{suffix}@example.test",
+                      demo_issues=False)
+    app = create_app(str(tmp_path / "workspace-admin.db"), open_mode=False)
+    client = TestClient(app)
+
+    def gql(token, query, variables=None):
+        return client.post("/graphql", headers={"Authorization": token},
+                           json={"query": query, "variables": variables or {}}).json()
+
+    members = gql(one["token"], "{ organizationMembers { nodes { email admin } } workspace { id name urlKey } }")
+    assert "errors" not in members
+    assert [m["email"] for m in members["data"]["organizationMembers"]["nodes"]] == [f"admin1-{suffix}@example.test"]
+    assert members["data"]["workspace"]["name"] == "One"
+    updated = gql(one["token"], "mutation($input: WorkspaceUpdateInput!){workspaceUpdate(input:$input){success organization{name urlKey}}}",
+                  {"input": {"name": "Renamed One", "urlKey": f"renamed-{suffix}"}})
+    assert "errors" not in updated
+    assert updated["data"]["workspaceUpdate"]["organization"]["name"] == "Renamed One"
+    still_two = gql(two["token"], "{ workspace { name urlKey } organizationMembers { nodes { email } } }")
+    assert still_two["data"]["workspace"]["name"] == "Two"
+    assert still_two["data"]["organizationMembers"]["nodes"][0]["email"] == f"admin2-{suffix}@example.test"
+    outsider_role = gql(one["token"], "mutation($id:String!){memberRoleUpdate(userId:$id,admin:true){success user{id}}}",
+                        {"id": two["user_id"]})
+    assert outsider_role["data"]["memberRoleUpdate"]["success"] is False
+    second_admin = new_id()
+    from cliniar_server.db import user as user_table
+    with engine.begin() as conn:
+        conn.execute(user_table.insert().values(id=second_admin, organization_id=one["org_id"],
+                     name="Second Admin", email=f"second-{suffix}@example.test", active=True,
+                     admin=True, created_at=now_iso(), updated_at=now_iso()))
+    granted = gql(one["token"], "mutation($id:String!){memberRoleUpdate(userId:$id,admin:false){success user{id admin}}}",
+                  {"id": second_admin})
+    assert granted["data"]["memberRoleUpdate"]["success"] is True
+    assert granted["data"]["memberRoleUpdate"]["user"]["admin"] is False
+    invited = gql(one["token"], "mutation($input:MemberInviteInput!){memberInvite(input:$input){success user{id email admin} apiKey}}",
+                  {"input": {"name": "New teammate", "email": f"new-{suffix}@example.test"}})
+    invited_user = invited["data"]["memberInvite"]
+    assert invited_user["success"] is True
+    assert invited_user["user"]["email"] == f"new-{suffix}@example.test"
+    assert invited_user["apiKey"].startswith("lin_api_")
+    duplicate = gql(one["token"], "mutation($input:MemberInviteInput!){memberInvite(input:$input){success}}",
+                    {"input": {"name": "Duplicate", "email": f"new-{suffix}@example.test"}})
+    assert duplicate["data"]["memberInvite"]["success"] is False
+    denied_invite = gql(two["token"], "mutation($input:MemberInviteInput!){memberInvite(input:$input){success}}",
+                        {"input": {"name": "No admin", "email": f"not-admin-{suffix}@example.test"}})
+    assert denied_invite["data"]["memberInvite"]["success"] is True
+
+    with engine.begin() as conn:
+        conn.execute(user_table.update().where(user_table.c.id == one["user_id"]).values(admin=False))
+    denied = gql(one["token"], "mutation($input: WorkspaceUpdateInput!){workspaceUpdate(input:$input){success organization{name}}}",
+                 {"input": {"name": "Unauthorized"}})
+    assert "errors" not in denied
+    assert denied["data"]["workspaceUpdate"]["success"] is False
+    denied_invite = gql(one["token"], "mutation($input:MemberInviteInput!){memberInvite(input:$input){success apiKey}}",
+                        {"input": {"name": "No admin", "email": f"not-admin-{suffix}@example.test"}})
+    assert denied_invite["data"]["memberInvite"]["success"] is False
+    assert denied_invite["data"]["memberInvite"]["apiKey"] is None
+    assert gql(one["token"], "{ workspace { name } }")["data"]["workspace"]["name"] == "Renamed One"

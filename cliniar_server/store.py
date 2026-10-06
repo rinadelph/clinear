@@ -6,23 +6,42 @@ cliniar's Pydantic models expect.
 """
 from __future__ import annotations
 
+import hashlib
+import json
+import hmac
+import secrets
+from datetime import datetime, timedelta, timezone
+
 from sqlalchemy import and_, or_, select
 from sqlalchemy.engine import Engine
 
 from cliniar_server.db import (
     api_key,
+    browser_session,
     comment,
     cycle,
     issue,
+    issue_activity,
+    inbox_notification,
+    initiative,
+    initiative_project,
+    organization,
+    global_identity,
+    organization_membership,
+    identity_credential,
+    membership_invitation,
+    new_id,
     issue_label,
     issue_label_link,
     issue_subscriber,
     project,
+    project_update,
     project_member,
     project_team,
     team,
     team_member,
     token_hash,
+    password_credential,
     user,
     workflow_state,
 )
@@ -66,6 +85,231 @@ class Store:
                 ),
             )
             return row
+
+    def create_browser_session_for_token(self, token: str, days: int = 14) -> tuple[str, dict] | None:
+        """Create a browser session for the owner of a valid API key."""
+        identity = self.resolve_token(token)
+        if not identity:
+            return None
+        raw = secrets.token_urlsafe(48)
+        now = datetime.now(timezone.utc)
+        expires = now + timedelta(days=days)
+        with self.engine.begin() as conn:
+            conn.execute(browser_session.insert().values(
+                id=new_id(), token_hash=token_hash(raw), user_id=identity["user_id"],
+                organization_id=identity["organization_id"], created_at=now.isoformat(),
+                expires_at=expires.isoformat()))
+        return raw, {"user_id": identity["user_id"],
+                     "organization_id": identity["organization_id"],
+                     "expires_at": expires.isoformat()}
+
+    @staticmethod
+    def _password_digest(password: str, salt: bytes) -> str:
+        digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 310_000)
+        return f"pbkdf2_sha256${salt.hex()}${digest.hex()}"
+
+    def set_password(self, api_token: str, password: str) -> bool:
+        if len(password) < 12:
+            raise ValueError("Password must be at least 12 characters.")
+        identity = self.resolve_token(api_token)
+        if not identity:
+            return False
+        salt = secrets.token_bytes(16)
+        encoded = self._password_digest(password, salt)
+        now = datetime.now(timezone.utc)
+        with self.engine.begin() as conn:
+            member = conn.execute(select(organization_membership.c.identity_id).where(
+                organization_membership.c.profile_user_id == identity["user_id"])).first()
+            if member:
+                existing = conn.execute(select(identity_credential.c.identity_id).where(
+                    identity_credential.c.identity_id == member[0])).first()
+                values = {"identity_id": member[0], "password_hash": encoded,
+                          "created_at": now.isoformat(), "updated_at": now.isoformat()}
+                credential_table = identity_credential
+                key_col = identity_credential.c.identity_id
+                credential_key = member[0]
+            else:
+                existing = conn.execute(select(password_credential.c.user_id).where(
+                    password_credential.c.user_id == identity["user_id"])).first()
+                values = {"user_id": identity["user_id"], "password_hash": encoded,
+                      "created_at": now.isoformat(), "updated_at": now.isoformat()}
+                credential_table = password_credential
+                key_col = password_credential.c.user_id
+                credential_key = identity["user_id"]
+            if existing:
+                conn.execute(credential_table.update().where(
+                    key_col == credential_key).values(
+                        password_hash=encoded, updated_at=now.isoformat()))
+            else:
+                conn.execute(credential_table.insert().values(**values))
+        return True
+
+    def workspaces_for_email(self, email: str) -> list[dict]:
+        with self.engine.connect() as conn:
+            rows = conn.execute(select(
+                organization_membership.c.identity_id,
+                organization_membership.c.organization_id,
+                organization_membership.c.profile_user_id,
+                organization.c.name, organization.c.url_key,
+                user.c.email, user.c.name.label("profile_name"), user.c.admin,
+            ).join(global_identity, global_identity.c.id == organization_membership.c.identity_id)
+             .join(organization, organization.c.id == organization_membership.c.organization_id)
+             .join(user, and_(user.c.id == organization_membership.c.profile_user_id,
+                              user.c.organization_id == organization_membership.c.organization_id))
+             .where(and_(global_identity.c.email == email.strip().lower(),
+                         organization_membership.c.active.is_(True),
+                         user.c.active.is_(True), user.c.archived_at.is_(None)))).mappings().all()
+        return [dict(row) for row in rows]
+
+    def matching_login_workspaces(self, email: str) -> list[dict]:
+        """Return selectable workspaces; credential verification happens after selection."""
+        return [{"organizationId": item["organization_id"],
+                 "name": item["name"], "urlKey": item["url_key"]}
+                for item in self.workspaces_for_email(email)]
+
+    def create_session_for_membership(self, identity_id: str, profile_user_id: str,
+                                      organization_id: str, days: int = 14) -> tuple[str, dict] | tuple[None, None]:
+        selected = self.switch_membership(identity_id, organization_id)
+        if not selected or selected["user_id"] != profile_user_id:
+            return None, None
+        raw = secrets.token_urlsafe(48)
+        now = datetime.now(timezone.utc)
+        expires = now + timedelta(days=days)
+        with self.engine.begin() as conn:
+            conn.execute(browser_session.insert().values(
+                id=new_id(), token_hash=token_hash(raw), user_id=profile_user_id,
+                organization_id=organization_id, created_at=now.isoformat(),
+                expires_at=expires.isoformat()))
+        return raw, {"expires_at": expires.isoformat(), "user_id": profile_user_id,
+                     "organization_id": organization_id, "identity_id": identity_id}
+
+    def create_browser_session(self, email: str, password: str, *, organization_ref: str | None = None, days: int = 14) -> tuple[str, dict] | None:
+        candidates = self.workspaces_for_email(email)
+        if organization_ref:
+            selected_workspace = next((r for r in candidates if
+                r["organization_id"] == organization_ref or r["url_key"] == organization_ref), None)
+            if not selected_workspace:
+                return None
+        else:
+            selected_workspace = candidates[0] if len(candidates) == 1 else None
+        if len(candidates) != 1:
+            # A shared identity credential authenticates once; an explicit
+            # workspace selects the profile only after membership is verified.
+            if not selected_workspace:
+                if candidates or not organization_ref:
+                    return None
+            else:
+                identity_id = selected_workspace["identity_id"]
+                with self.engine.connect() as conn:
+                    credential = conn.execute(select(identity_credential).where(
+                        identity_credential.c.identity_id == identity_id
+                    )).mappings().first()
+                if not credential:
+                    return None
+                try:
+                    _scheme, salt_hex, _digest = credential["password_hash"].split("$")
+                    candidate = self._password_digest(password, bytes.fromhex(salt_hex))
+                except (ValueError, TypeError):
+                    return None
+                if not hmac.compare_digest(candidate, credential["password_hash"]):
+                    return None
+                raw = secrets.token_urlsafe(48)
+                now = datetime.now(timezone.utc)
+                expires = now + timedelta(days=days)
+                with self.engine.begin() as conn:
+                    conn.execute(browser_session.insert().values(
+                        id=new_id(), token_hash=token_hash(raw),
+                        user_id=selected_workspace["profile_user_id"],
+                        organization_id=selected_workspace["organization_id"],
+                        created_at=now.isoformat(), expires_at=expires.isoformat()))
+                return raw, {"user_id": selected_workspace["profile_user_id"],
+                             "identity_id": identity_id,
+                             "organization_id": selected_workspace["organization_id"],
+                             "expires_at": expires.isoformat()}
+            # Pre-revision-6 fallback only; duplicate identities remain isolated.
+            with self.engine.connect() as conn:
+                legacy = conn.execute(select(password_credential.c.password_hash,
+                    user.c.id.label("profile_user_id"), user.c.organization_id,
+                    user.c.email, organization.c.url_key)
+                    .join(user, user.c.id == password_credential.c.user_id)
+                    .join(organization, organization.c.id == user.c.organization_id)
+                    .where(and_(user.c.email.ilike(email), user.c.active.is_(True),
+                                user.c.archived_at.is_(None),
+                                or_(user.c.organization_id == organization_ref,
+                                    organization.c.url_key == organization_ref)))).mappings().first()
+            if not legacy:
+                return None
+            try:
+                _scheme, salt_hex, _digest = legacy["password_hash"].split("$")
+                candidate = self._password_digest(password, bytes.fromhex(salt_hex))
+            except (ValueError, TypeError):
+                return None
+            if not hmac.compare_digest(candidate, legacy["password_hash"]):
+                return None
+            raw = secrets.token_urlsafe(48)
+            now = datetime.now(timezone.utc)
+            expires = now + timedelta(days=days)
+            with self.engine.begin() as conn:
+                conn.execute(browser_session.insert().values(
+                    id=new_id(), token_hash=token_hash(raw), user_id=legacy["profile_user_id"],
+                    organization_id=legacy["organization_id"], created_at=now.isoformat(),
+                    expires_at=expires.isoformat()))
+            return raw, {"user_id": legacy["profile_user_id"],
+                         "organization_id": legacy["organization_id"], "expires_at": expires.isoformat()}
+        selected = selected_workspace or candidates[0]
+        with self.engine.connect() as conn:
+            credential = conn.execute(select(identity_credential).where(
+                identity_credential.c.identity_id == selected["identity_id"])).mappings().first()
+            if not credential:
+                # Backward-compatible fallback before migration/identity setup.
+                credential = conn.execute(select(password_credential).where(
+                    password_credential.c.user_id == selected["profile_user_id"])).mappings().first()
+        if not credential:
+            return None
+        try:
+            _scheme, salt_hex, _digest = credential["password_hash"].split("$")
+            candidate = self._password_digest(password, bytes.fromhex(salt_hex))
+        except (ValueError, TypeError):
+            return None
+        if not hmac.compare_digest(candidate, credential["password_hash"]):
+            return None
+        raw = secrets.token_urlsafe(48)
+        now = datetime.now(timezone.utc)
+        expires = now + timedelta(days=days)
+        with self.engine.begin() as conn:
+            conn.execute(browser_session.insert().values(
+                id=new_id(), token_hash=token_hash(raw), user_id=selected["profile_user_id"],
+                organization_id=selected["organization_id"], created_at=now.isoformat(),
+                expires_at=expires.isoformat()))
+        return raw, {"user_id": selected["profile_user_id"], "identity_id": selected["identity_id"],
+                     "organization_id": selected["organization_id"], "expires_at": expires.isoformat()}
+
+    def resolve_browser_session(self, raw: str) -> dict | None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self.engine.connect() as conn:
+            session = _one(conn, select(browser_session).join(user, and_(
+                user.c.id == browser_session.c.user_id,
+                user.c.organization_id == browser_session.c.organization_id))
+                .where(and_(browser_session.c.token_hash == token_hash(raw),
+                    browser_session.c.revoked_at.is_(None), browser_session.c.expires_at > now,
+                    user.c.active.is_(True), user.c.archived_at.is_(None))))
+            if not session:
+                return None
+            membership = _one(conn, select(organization_membership).where(and_(
+                organization_membership.c.profile_user_id == session["user_id"],
+                organization_membership.c.organization_id == session["organization_id"],
+                organization_membership.c.active.is_(True))))
+            if not membership:
+                return None
+            session["identity_id"] = membership["identity_id"]
+            return session
+
+    def revoke_browser_session(self, raw: str) -> None:
+        with self.engine.begin() as conn:
+            conn.execute(browser_session.update().where(and_(
+                browser_session.c.token_hash == token_hash(raw),
+                browser_session.c.revoked_at.is_(None))).values(
+                    revoked_at=datetime.now(timezone.utc).isoformat()))
 
     # ------------------------------------------------------------ serializers
     def ser_user(self, row: dict | None, ctx_user_id: str | None = None) -> dict | None:
@@ -172,6 +416,229 @@ class Store:
     def viewer(self, org_id: str, user_id: str) -> dict | None:
         return self.ser_user(self.get_user(org_id, user_id), user_id)
 
+    def membership_for_profile(self, org_id: str, user_id: str) -> dict | None:
+        with self.engine.connect() as conn:
+            return _one(conn, select(organization_membership).where(and_(
+                organization_membership.c.organization_id == org_id,
+                organization_membership.c.profile_user_id == user_id,
+                organization_membership.c.active.is_(True))))
+
+    def identity_workspaces(self, identity_id: str) -> list[dict]:
+        with self.engine.connect() as conn:
+            rows = conn.execute(select(
+                organization_membership.c.id,
+                organization_membership.c.organization_id.label("organizationId"),
+                organization.c.name, organization.c.url_key.label("urlKey"),
+                user.c.admin,
+            ).join(organization, organization.c.id == organization_membership.c.organization_id)
+             .join(user, and_(user.c.id == organization_membership.c.profile_user_id,
+                              user.c.organization_id == organization_membership.c.organization_id))
+             .where(and_(organization_membership.c.identity_id == identity_id,
+                         organization_membership.c.active.is_(True),
+                         user.c.active.is_(True), user.c.archived_at.is_(None)))
+             .order_by(organization.c.name)).mappings().all()
+        return [{"id": r["id"], "organizationId": r["organizationId"],
+                 "name": r["name"], "urlKey": r["urlKey"],
+                 "role": "admin" if r["admin"] else "member"} for r in rows]
+
+    def switch_membership(self, identity_id: str | None, organization_ref: str) -> dict | None:
+        if not identity_id:
+            return None
+        with self.engine.connect() as conn:
+            row = conn.execute(select(
+                organization_membership.c.profile_user_id,
+                organization_membership.c.organization_id,
+                organization.c.id.label("id"), organization.c.name,
+                organization.c.url_key.label("urlKey"),
+            ).join(organization, organization.c.id == organization_membership.c.organization_id)
+             .join(user, and_(user.c.id == organization_membership.c.profile_user_id,
+                              user.c.organization_id == organization_membership.c.organization_id))
+             .where(and_(organization_membership.c.identity_id == identity_id,
+                         organization.c.id == organization_ref,
+                         organization_membership.c.active.is_(True),
+                         user.c.active.is_(True), user.c.archived_at.is_(None)))).mappings().first()
+        if not row:
+            return None
+        return {"user_id": row["profile_user_id"], "organization_id": row["organization_id"],
+                "organization": {"id": row["id"], "name": row["name"], "urlKey": row["urlKey"]}}
+
+    def create_membership_invitation(self, org_id: str, profile_user_id: str,
+                                     creator_profile_id: str, hours: int = 72) -> str | None:
+        raw = secrets.token_urlsafe(32)
+        now = datetime.now(timezone.utc)
+        with self.engine.begin() as conn:
+            valid = conn.execute(select(user.c.id).where(and_(
+                user.c.id == profile_user_id, user.c.organization_id == org_id,
+                user.c.active.is_(True), user.c.archived_at.is_(None),
+            ))).first()
+            if not valid:
+                return None
+            # Replace any still-pending invitation for this profile so it remains one-time.
+            conn.execute(membership_invitation.delete().where(and_(
+                membership_invitation.c.profile_user_id == profile_user_id,
+                membership_invitation.c.accepted_at.is_(None),
+            )))
+            conn.execute(membership_invitation.insert().values(
+                id=new_id(), token_hash=token_hash(raw), organization_id=org_id,
+                profile_user_id=profile_user_id, created_by_profile_id=creator_profile_id,
+                created_at=now.isoformat(),
+                expires_at=(now + timedelta(hours=hours)).isoformat()))
+        return raw
+
+    def accept_membership_invitation(self, identity_id: str, raw: str,
+                                     invitee_password: str) -> dict | None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self.engine.begin() as conn:
+            invite = conn.execute(select(membership_invitation).where(and_(
+                membership_invitation.c.token_hash == token_hash(raw),
+                membership_invitation.c.accepted_at.is_(None),
+                membership_invitation.c.expires_at > now,
+            ))).mappings().first()
+            if not invite:
+                return None
+            already = conn.execute(select(organization_membership.c.id).where(and_(
+                organization_membership.c.identity_id == identity_id,
+                organization_membership.c.organization_id == invite["organization_id"],
+            ))).first()
+            if already:
+                return None
+            profile = conn.execute(select(user.c.id).where(and_(
+                user.c.id == invite["profile_user_id"],
+                user.c.organization_id == invite["organization_id"],
+                user.c.active.is_(True), user.c.archived_at.is_(None),
+            ))).first()
+            if not profile:
+                return None
+            identity_email = conn.execute(select(global_identity.c.email).where(
+                global_identity.c.id == identity_id)).scalar_one_or_none()
+            target_identity = conn.execute(select(organization_membership.c.identity_id).where(
+                organization_membership.c.profile_user_id == profile[0])).scalar_one_or_none()
+            target_credential = conn.execute(select(identity_credential).where(
+                identity_credential.c.identity_id == target_identity)).mappings().first() if target_identity else None
+            profile_email = conn.execute(select(user.c.email).where(
+                user.c.id == profile[0])).scalar_one_or_none()
+            if (not identity_email or not profile_email or identity_id == target_identity or
+                    identity_email.strip().lower() != profile_email.strip().lower() or
+                    not target_credential):
+                return None
+            try:
+                _scheme, salt_hex, _digest = target_credential["password_hash"].split("$")
+                candidate = self._password_digest(invitee_password, bytes.fromhex(salt_hex))
+            except (ValueError, TypeError):
+                return None
+            if not hmac.compare_digest(candidate, target_credential["password_hash"]):
+                return None
+            conn.execute(organization_membership.update().where(
+                organization_membership.c.profile_user_id == profile[0]).values(
+                    identity_id=identity_id, active=True))
+            conn.execute(membership_invitation.update().where(
+                membership_invitation.c.id == invite["id"]).values(
+                    accepted_at=now, accepted_identity_id=identity_id))
+            org_row = conn.execute(select(organization.c.id, organization.c.name,
+                                          organization.c.url_key).where(
+                organization.c.id == invite["organization_id"])).mappings().first()
+            return {"id": org_row["id"], "name": org_row["name"],
+                    "urlKey": org_row["url_key"]} if org_row else None
+
+    def organization_members(self, org_id: str) -> list[dict]:
+        with self.engine.connect() as conn:
+            return _conn_rows(conn, select(user).where(and_(
+                user.c.organization_id == org_id,
+                user.c.archived_at.is_(None),
+            )).order_by(user.c.name, user.c.email))
+
+    def set_member_admin_role(self, org_id: str, user_id: str, is_admin: bool) -> dict | None:
+        with self.engine.begin() as conn:
+            target = conn.execute(select(user.c.admin).where(and_(
+                user.c.organization_id == org_id, user.c.id == user_id,
+                user.c.archived_at.is_(None),
+            ))).first()
+            if not target:
+                return None
+            if target[0] and not is_admin:
+                admins = conn.execute(select(user.c.id).where(and_(
+                    user.c.organization_id == org_id, user.c.admin.is_(True),
+                    user.c.archived_at.is_(None),
+                ))).all()
+                if len(admins) <= 1:
+                    return None
+            result = conn.execute(user.update().where(and_(
+                user.c.organization_id == org_id, user.c.id == user_id,
+                user.c.archived_at.is_(None),
+            )).values(admin=bool(is_admin), updated_at=datetime.now(timezone.utc).isoformat()))
+            if not result.rowcount:
+                return None
+        return self.get_user(org_id, user_id)
+
+    def invite_member(self, org_id: str, name: str, email: str, is_admin: bool = False) -> tuple[dict, str] | None:
+        from cliniar_server.db import api_key as api_key_table, gen_token, new_id, token_hash
+
+        normalized_email = email.strip().lower()
+        clean_name = name.strip()
+        if not clean_name or "@" not in normalized_email:
+            return None
+        raw_token = gen_token()
+        uid = new_id()
+        now = datetime.now(timezone.utc).isoformat()
+        with self.engine.begin() as conn:
+            if conn.execute(select(global_identity.c.id).where(
+                global_identity.c.email == normalized_email)).first():
+                return None
+            if conn.execute(select(user.c.id).where(and_(
+                user.c.organization_id == org_id,
+                user.c.email.ilike(normalized_email),
+                user.c.archived_at.is_(None),
+            ))).first():
+                return None
+            conn.execute(user.insert().values(
+                id=uid, organization_id=org_id, name=clean_name, display_name=clean_name,
+                email=normalized_email, active=True, admin=bool(is_admin),
+                created_at=now, updated_at=now,
+            ))
+            identity_id = new_id()
+            conn.execute(global_identity.insert().values(
+                id=identity_id, email=normalized_email, created_at=now))
+            conn.execute(organization_membership.insert().values(
+                id=new_id(), identity_id=identity_id, organization_id=org_id,
+                profile_user_id=uid, active=True, created_at=now))
+            conn.execute(api_key_table.insert().values(
+                id=new_id(), token_hash=token_hash(raw_token), label="member invite",
+                user_id=uid, organization_id=org_id, created_at=now,
+            ))
+        return self.get_user(org_id, uid), raw_token
+
+    def workspace(self, org_id: str) -> dict | None:
+        with self.engine.connect() as conn:
+            return _one(conn, select(organization.c.id, organization.c.name,
+                                     organization.c.url_key.label("urlKey")).where(
+                organization.c.id == org_id))
+
+    def update_workspace(self, org_id: str, values: dict) -> dict | None:
+        changes = {}
+        if values.get("name") is not None:
+            name = values["name"].strip()
+            if not name:
+                return None
+            changes["name"] = name
+        if values.get("urlKey") is not None:
+            url_key = values["urlKey"].strip().lower()
+            if not url_key or not url_key.replace("-", "").isalnum():
+                return None
+            changes["url_key"] = url_key
+        if not changes:
+            return self.workspace(org_id)
+        changes["updated_at"] = datetime.now(timezone.utc).isoformat()
+        with self.engine.begin() as conn:
+            result = conn.execute(organization.update().where(
+                organization.c.id == org_id).values(**changes))
+            if not result.rowcount:
+                return None
+        return self.workspace(org_id)
+
+    def workspace_update(self, org_id: str, values: dict) -> dict | None:
+        """Compatibility alias for the existing workspace settings update."""
+        return self.update_workspace(org_id, values)
+
     def teams(self, org_id: str, key: str | None = None) -> list[dict]:
         with self.engine.connect() as conn:
             stmt = select(team).where(and_(
@@ -261,6 +728,99 @@ class Store:
                 or_(issue.c.id == ident, issue.c.identifier == ident.upper()))))
             return self.ser_issue(row)
 
+    def inbox_notifications(self, org_id: str, user_id: str, after=None, limit=51,
+                            unread_only=False, archived=False) -> list[dict]:
+        with self.engine.connect() as conn:
+            stmt = select(inbox_notification).where(and_(
+                inbox_notification.c.organization_id == org_id,
+                inbox_notification.c.recipient_id == user_id,
+                inbox_notification.c.archived_at.is_not(None) if archived else inbox_notification.c.archived_at.is_(None),
+            ))
+            if unread_only:
+                stmt = stmt.where(inbox_notification.c.read_at.is_(None))
+            if after:
+                ts, notification_id = after
+                stmt = stmt.where(or_(inbox_notification.c.created_at < ts,
+                    and_(inbox_notification.c.created_at == ts, inbox_notification.c.id < notification_id)))
+            return _conn_rows(conn, stmt.order_by(
+                inbox_notification.c.created_at.desc(), inbox_notification.c.id.desc()).limit(limit))
+
+    def inbox_unread_count(self, org_id: str, user_id: str) -> int:
+        from sqlalchemy import func
+        with self.engine.connect() as conn:
+            return conn.execute(select(func.count()).select_from(inbox_notification).where(and_(
+                inbox_notification.c.organization_id == org_id,
+                inbox_notification.c.recipient_id == user_id,
+                inbox_notification.c.read_at.is_(None),
+                inbox_notification.c.archived_at.is_(None),
+            ))).scalar_one()
+
+    def inbox_mark(self, org_id: str, user_id: str, notification_id: str, column: str) -> bool:
+        if column not in ("read_at", "archived_at"):
+            raise ValueError("Unsupported notification state.")
+        from cliniar_server.db import now_iso
+        target = inbox_notification.c[column]
+        with self.engine.begin() as conn:
+            result = conn.execute(inbox_notification.update().where(and_(
+                inbox_notification.c.id == notification_id,
+                inbox_notification.c.organization_id == org_id,
+                inbox_notification.c.recipient_id == user_id,
+                target.is_(None),
+            )).values({column: now_iso()}))
+            return result.rowcount > 0 or conn.execute(select(inbox_notification.c.id).where(and_(
+                inbox_notification.c.id == notification_id,
+                inbox_notification.c.organization_id == org_id,
+                inbox_notification.c.recipient_id == user_id,
+            ))).first() is not None
+
+    def inbox_mark_all_read(self, org_id: str, user_id: str) -> bool:
+        from cliniar_server.db import now_iso
+        with self.engine.begin() as conn:
+            conn.execute(inbox_notification.update().where(and_(
+                inbox_notification.c.organization_id == org_id,
+                inbox_notification.c.recipient_id == user_id,
+                inbox_notification.c.read_at.is_(None),
+            )).values(read_at=now_iso()))
+        return True
+
+    def my_issue_activity(self, org_id: str, viewer_id: str, after=None, limit=51) -> list[dict]:
+        with self.engine.connect() as conn:
+            stmt = select(issue_activity).join(issue, and_(
+                issue_activity.c.issue_id == issue.c.id,
+                issue_activity.c.organization_id == issue.c.organization_id,
+            )).where(and_(
+                issue_activity.c.organization_id == org_id,
+                issue.c.organization_id == org_id,
+                issue.c.archived_at.is_(None),
+                or_(issue.c.assignee_id == viewer_id, issue.c.creator_id == viewer_id,
+                    issue_activity.c.actor_id == viewer_id),
+            ))
+            if after:
+                ts, event_id = after
+                stmt = stmt.where(or_(issue_activity.c.created_at < ts,
+                    and_(issue_activity.c.created_at == ts, issue_activity.c.id < event_id)))
+            rows = _conn_rows(conn, stmt.order_by(
+                issue_activity.c.created_at.desc(), issue_activity.c.id.desc()).limit(limit))
+            for row in rows:
+                row["changes"] = json.loads(row["changes"]) if row.get("changes") else None
+            return rows
+
+    def issue_activity_for(self, org_id: str, issue_id: str, after=None, limit=51) -> list[dict]:
+        with self.engine.connect() as conn:
+            stmt = select(issue_activity).where(and_(
+                issue_activity.c.organization_id == org_id,
+                issue_activity.c.issue_id == issue_id,
+            ))
+            if after:
+                ts, event_id = after
+                stmt = stmt.where(or_(issue_activity.c.created_at < ts,
+                    and_(issue_activity.c.created_at == ts, issue_activity.c.id < event_id)))
+            rows = _conn_rows(conn, stmt.order_by(
+                issue_activity.c.created_at.desc(), issue_activity.c.id.desc()).limit(limit))
+            for row in rows:
+                row["changes"] = json.loads(row["changes"]) if row.get("changes") else None
+            return rows
+
     def labels(self, org_id: str, team_id: str | None = None, name: str | None = None) -> list[dict]:
         with self.engine.connect() as conn:
             stmt = select(issue_label).where(and_(
@@ -293,17 +853,86 @@ class Store:
                 comment.c.archived_at.is_(None))).order_by(comment.c.created_at)
             return [self.ser_comment(r) for r in _conn_rows(conn, stmt)]
 
-    def projects(self, org_id: str, flt: dict | None = None) -> list[dict]:
+    def projects(self, org_id: str, flt: dict | None = None,
+                 after: tuple[str, str] | None = None, limit: int | None = None) -> list[dict]:
         with self.engine.connect() as conn:
             stmt = select(project).where(and_(
                 project.c.organization_id == org_id, project.c.archived_at.is_(None)))
-            stmt = _apply_project_filter(stmt, flt)
-            return [self.ser_project(r) for r in _conn_rows(conn, stmt.order_by(project.c.created_at))]
+            stmt = _apply_project_filter(stmt, flt, conn, org_id)
+            if after:
+                stmt = stmt.where((project.c.created_at > after[0]) |
+                                  ((project.c.created_at == after[0]) & (project.c.id > after[1])))
+            stmt = stmt.order_by(project.c.created_at, project.c.id)
+            if limit is not None:
+                stmt = stmt.limit(limit)
+            return [self.ser_project(r) for r in _conn_rows(conn, stmt)]
+
+    def cycle_by_id(self, org_id: str, cycle_id: str) -> dict | None:
+        with self.engine.connect() as conn:
+            row = _one(conn, select(cycle).where(and_(
+                cycle.c.organization_id == org_id, cycle.c.id == cycle_id)))
+            return self.ser_cycle(row)
 
     def project_by_id(self, org_id: str, pid: str) -> dict | None:
         with self.engine.connect() as conn:
             return self.ser_project(_one(conn, select(project).where(and_(
-                project.c.organization_id == org_id, project.c.id == pid))))
+                project.c.organization_id == org_id, project.c.id == pid,
+                project.c.archived_at.is_(None)))))
+
+    def initiatives(self, org_id: str, after: tuple[str, str] | None = None, status: str | None = None, limit: int = 51) -> list[dict]:
+        stmt = select(initiative).where(and_(initiative.c.organization_id == org_id, initiative.c.archived_at.is_(None)))
+        if status:
+            stmt = stmt.where(initiative.c.status == status)
+        if after:
+            stmt = stmt.where((initiative.c.created_at < after[0]) | ((initiative.c.created_at == after[0]) & (initiative.c.id < after[1])))
+        with self.engine.connect() as conn:
+            rows = _conn_rows(conn, stmt.order_by(initiative.c.created_at.desc(), initiative.c.id.desc()).limit(limit))
+            return [self.ser_initiative(conn, row) for row in rows]
+
+    def initiative_by_id(self, org_id: str, ident: str) -> dict | None:
+        with self.engine.connect() as conn:
+            row = _one(conn, select(initiative).where(and_(initiative.c.organization_id == org_id, initiative.c.id == ident, initiative.c.archived_at.is_(None))))
+            return self.ser_initiative(conn, row) if row else None
+
+    @staticmethod
+    def ser_initiative(conn, row) -> dict:
+        result = {"id": row["id"], "name": row["name"], "summary": row["summary"], "status": row["status"], "priority": row["priority"], "targetDate": row["target_date"], "createdAt": row["created_at"], "updatedAt": row["updated_at"], "_owner_id": row["owner_id"], "_creator_id": row["creator_id"], "_org_id": row["organization_id"], "owner": None, "creator": None}
+        for field in ("owner", "creator"):
+            uid = row[f"{field}_id"]
+            if uid:
+                user_row = _one(conn, select(user).where(and_(user.c.organization_id == row["organization_id"], user.c.id == uid)))
+                result[field] = Store.__new__(Store).ser_user(user_row) if user_row else None
+        ids = list(conn.execute(select(project.c.id).select_from(project.join(initiative_project, initiative_project.c.project_id == project.c.id)).where(and_(initiative_project.c.organization_id == row["organization_id"], initiative_project.c.initiative_id == row["id"], project.c.organization_id == row["organization_id"], project.c.archived_at.is_(None)))).scalars())
+        result["projects"] = {"nodes": [Store.__new__(Store).ser_project(_one(conn, select(project).where(project.c.id == pid))) for pid in ids], "pageInfo": {"hasNextPage": False, "hasPreviousPage": False, "startCursor": None, "endCursor": None}}
+        return result
+
+    def project_updates(self, org_id: str, after: tuple[str, str] | None = None,
+                       project_id: str | None = None, limit: int = 51) -> list[dict]:
+        """Return organization-scoped update posts newest-first, with stable id tie-breaks."""
+        stmt = select(project_update).where(project_update.c.organization_id == org_id)
+        stmt = stmt.join(project, and_(project.c.id == project_update.c.project_id,
+                                       project.c.organization_id == org_id,
+                                       project.c.archived_at.is_(None)))
+        if project_id:
+            stmt = stmt.where(project_update.c.project_id == project_id)
+        if after:
+            created_at, update_id = after
+            stmt = stmt.where(or_(project_update.c.created_at < created_at,
+                                  and_(project_update.c.created_at == created_at,
+                                       project_update.c.id < update_id)))
+        stmt = stmt.order_by(project_update.c.created_at.desc(), project_update.c.id.desc()).limit(limit)
+        with self.engine.connect() as conn:
+            rows = _conn_rows(conn, stmt)
+            result = []
+            for row in rows:
+                row["_project_id"] = row["project_id"]
+                row["_actor_id"] = row.get("actor_id")
+                row["createdAt"] = row["created_at"]
+                result.append(row)
+            return result
+
+    def project_update_project(self, org_id: str, pid: str) -> dict | None:
+        return self.project_by_id(org_id, pid)
 
     def project_members(self, org_id: str, project_id: str) -> list[dict]:
         with self.engine.connect() as conn:
@@ -335,13 +964,19 @@ class Store:
 
     # --------------------------------------------------------------- issue list
     def issues(self, org_id: str, viewer_id: str, flt: dict | None,
-               order_by: str = "updatedAt") -> list[dict]:
+               order_by: str = "updatedAt", after: tuple[str, str] | None = None,
+               limit: int | None = None) -> list[dict]:
         with self.engine.connect() as conn:
             stmt = select(issue).where(and_(
                 issue.c.organization_id == org_id, issue.c.archived_at.is_(None)))
             stmt = _apply_issue_filter(conn, stmt, org_id, viewer_id, flt)
             col = issue.c.updated_at if order_by == "updatedAt" else issue.c.created_at
-            stmt = stmt.order_by(col.desc())
+            stmt = stmt.order_by(col.desc(), issue.c.id.desc())
+            if after:
+                from sqlalchemy import or_
+                stmt = stmt.where(or_(col < after[0], and_(col == after[0], issue.c.id < after[1])))
+            if limit is not None:
+                stmt = stmt.limit(limit)
             return [self.ser_issue(r) for r in _conn_rows(conn, stmt)]
 
     def search_issues(self, org_id: str, term: str) -> list[dict]:
@@ -411,7 +1046,7 @@ def _apply_date_cmp(col, cmp: dict):
     return and_(*clauses) if clauses else None
 
 
-def _apply_project_filter(stmt, flt: dict | None):
+def _apply_project_filter(stmt, flt: dict | None, conn, org_id: str):
     if not flt:
         return stmt
     if "slugId" in flt:
@@ -426,6 +1061,11 @@ def _apply_project_filter(stmt, flt: dict | None):
         c = _apply_str_cmp(project.c.state, flt["state"])
         if c is not None:
             stmt = stmt.where(c)
+    if "team" in flt:
+        team_ids = _resolve_team_ids(conn, org_id, flt["team"])
+        project_ids = select(project_team.c.project_id).where(
+            project_team.c.team_id.in_(team_ids or ["__none__"]))
+        stmt = stmt.where(project.c.id.in_(project_ids))
     return stmt
 
 

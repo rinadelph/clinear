@@ -5,24 +5,91 @@ scalar DateTime
 scalar TimelessDate
 scalar JSON
 
+type Organization {
+  id: ID!
+  name: String!
+  urlKey: String!
+}
+
+type WorkspaceMembership {
+  id: ID!
+  organizationId: ID!
+  name: String!
+  urlKey: String!
+  role: String!
+}
+
+type OrganizationPayload {
+  success: Boolean!
+  organization: Organization
+}
+
+type UserPayload {
+  success: Boolean!
+  user: User
+  apiKey: String
+  inviteCode: String
+}
+
+input InitiativeCreateInput { name: String! summary: String status: String priority: Int ownerId: String targetDate: TimelessDate projectIds: [String!] }
+input InitiativeUpdateInput { name: String summary: String status: String priority: Int ownerId: String targetDate: TimelessDate projectIds: [String!] }
+
+input WorkspaceUpdateInput {
+  name: String
+  urlKey: String
+}
+
+input WorkspaceCreateInput {
+  name: String!
+  urlKey: String!
+}
+
+input MemberInviteInput {
+  email: String!
+  name: String!
+  admin: Boolean = false
+}
+
 type Query {
   viewer: User
+  myWorkspaces: [WorkspaceMembership!]!
+  organizationMembers(first: Int = 100): UserConnection
+  workspace: Organization
   teams(first: Int = 50, after: String, filter: TeamFilter): TeamConnection
   team(id: String!): Team
   issues(filter: IssueFilter, first: Int = 50, after: String, orderBy: PaginationOrderBy): IssueConnection
   issue(id: String!): Issue
+  myIssueActivity(first: Int = 50, after: String): MyIssueActivityConnection
+  inboxNotifications(first: Int = 50, after: String, unreadOnly: Boolean = false, archived: Boolean = false): InboxNotificationConnection
+  inboxUnreadCount: Int!
   projects(filter: ProjectFilter, first: Int = 50, after: String): ProjectConnection
+  initiatives(first: Int = 50, after: String, status: String): InitiativeConnection
+  initiative(id: String!): Initiative
+  projectUpdates(first: Int = 50, after: String, filter: ProjectUpdateFilter): ProjectUpdateConnection
   project(id: String!): Project
   workflowStates(filter: WorkflowStateFilter, first: Int = 100, after: String): WorkflowStateConnection
   cycles(filter: CycleFilter, first: Int = 100, after: String): CycleConnection
+  cycle(id: String!): Cycle
+  teamCycleCadence(teamId: String!): TeamCycleCadence!
   issueLabels(filter: IssueLabelFilter, first: Int = 100, after: String): IssueLabelConnection
   searchIssues(term: String!, first: Int = 20): IssueConnection
   rateLimitStatus: RateLimitPayload
 }
 
 type Mutation {
+  workspaceCreate(input: WorkspaceCreateInput!): OrganizationPayload
+  teamCreate(input: TeamCreateInput!): TeamPayload
+  workspaceSwitch(organizationId: String!): OrganizationPayload
+  membershipInvitationCreate(userId: String!): UserPayload
+  membershipInvitationAccept(code: String!, inviteePassword: String!): OrganizationPayload
+  workspaceUpdate(input: WorkspaceUpdateInput!): OrganizationPayload
+  memberInvite(input: MemberInviteInput!): UserPayload
+  memberRoleUpdate(userId: String!, admin: Boolean!): UserPayload
   issueCreate(input: IssueCreateInput!): IssuePayload
   issueUpdate(id: String!, input: IssueUpdateInput!): IssuePayload
+  notificationMarkRead(id: String!): Boolean!
+  notificationArchive(id: String!): Boolean!
+  notificationMarkAllRead: Boolean!
   issueDelete(id: String!): DeletePayload
   issueArchive(id: String!): DeletePayload
   commentCreate(input: CommentCreateInput!): CommentPayload
@@ -32,7 +99,12 @@ type Mutation {
   issueLabelDelete(id: String!): DeletePayload
   projectCreate(input: ProjectCreateInput!): ProjectPayload
   projectUpdate(id: String!, input: ProjectUpdateInput!): ProjectPayload
+  projectUpdateCreate(input: ProjectUpdateCreateInput!): ProjectUpdatePayload
   projectArchive(id: String!): DeletePayload
+  teamCycleCadenceEnable(teamId: String!, weekday: Int!): TeamCycleCadence!
+  initiativeCreate(input: InitiativeCreateInput!): InitiativePayload
+  initiativeUpdate(id: String!, input: InitiativeUpdateInput!): InitiativePayload
+  initiativeArchive(id: String!): DeletePayload
   attachmentCreate(input: AttachmentCreateInput!): AttachmentPayload
 }
 
@@ -44,6 +116,17 @@ type PageInfo {
   startCursor: String
   endCursor: String
 }
+
+type InboxNotification {
+  id: ID!
+  issue: Issue!
+  actor: User
+  kind: String!
+  createdAt: DateTime!
+  readAt: DateTime
+  archivedAt: DateTime
+}
+type InboxNotificationConnection { nodes: [InboxNotification!]! pageInfo: PageInfo! }
 
 type User {
   id: ID!
@@ -100,6 +183,8 @@ type IssueLabel {
   updatedAt: DateTime
 }
 
+type TeamCycleCadence { enabled: Boolean! weekday: Int timezone: String! policyVersion: Int! activeCycle: Cycle upcomingCycles: [Cycle!]! }
+
 type Cycle {
   id: ID!
   name: String
@@ -133,6 +218,20 @@ type Project {
   createdAt: DateTime
   updatedAt: DateTime
 }
+
+input ProjectUpdateFilter { project: ProjectFilter }
+
+type ProjectUpdate {
+  id: ID!
+  project: Project!
+  status: String
+  body: String!
+  createdAt: DateTime!
+  actor: User
+  progress: Float
+  health: String
+}
+type ProjectUpdatePayload { success: Boolean! projectUpdate: ProjectUpdate }
 
 type Comment {
   id: ID!
@@ -171,16 +270,26 @@ type Issue {
   labels(first: Int = 50): IssueLabelConnection
   subscribers(first: Int = 50): UserConnection
   comments(first: Int = 50): CommentConnection
+  activity(first: Int = 50, after: String): IssueActivityConnection
 }
 
 type UserConnection { nodes: [User!]! pageInfo: PageInfo! }
+type TeamPayload { success: Boolean! team: Team }
 type TeamConnection { nodes: [Team!]! pageInfo: PageInfo! }
 type WorkflowStateConnection { nodes: [WorkflowState!]! pageInfo: PageInfo! }
 type IssueConnection { nodes: [Issue!]! pageInfo: PageInfo! }
 type IssueLabelConnection { nodes: [IssueLabel!]! pageInfo: PageInfo! }
 type ProjectConnection { nodes: [Project!]! pageInfo: PageInfo! }
+type InitiativeConnection { nodes: [Initiative!]! pageInfo: PageInfo! }
+type Initiative { id: ID! name: String! summary: String status: String! priority: Int! owner: User creator: User targetDate: TimelessDate createdAt: DateTime! updatedAt: DateTime! projects: ProjectConnection! }
+type InitiativePayload { success: Boolean! initiative: Initiative }
+type ProjectUpdateConnection { nodes: [ProjectUpdate!]! pageInfo: PageInfo! }
 type CycleConnection { nodes: [Cycle!]! pageInfo: PageInfo! }
 type CommentConnection { nodes: [Comment!]! pageInfo: PageInfo! }
+type IssueActivity { id: ID! eventType: String! actor: User changes: JSON createdAt: DateTime! }
+type IssueActivityConnection { nodes: [IssueActivity!]! pageInfo: PageInfo! }
+type MyIssueActivity { id: ID! issue: Issue! eventType: String! actor: User changes: JSON createdAt: DateTime! }
+type MyIssueActivityConnection { nodes: [MyIssueActivity!]! pageInfo: PageInfo! }
 
 type IssuePayload { success: Boolean! issue: Issue }
 type CommentPayload { success: Boolean! comment: Comment }
@@ -248,10 +357,11 @@ input IssueFilter {
   or: [IssueFilter!]
 }
 
-input ProjectFilter { slugId: StringComparator name: StringComparator state: StringComparator }
+input ProjectFilter { id: IDComparator slugId: StringComparator name: StringComparator state: StringComparator team: TeamFilter }
 input IssueLabelFilter { team: TeamFilter name: StringComparator }
 
 # ---- Mutation inputs ----
+input TeamCreateInput { name: String! key: String! description: String color: String icon: String private: Boolean timezone: String }
 input IssueCreateInput {
   title: String!
   teamId: String!
@@ -284,4 +394,5 @@ input CommentUpdateInput { body: String }
 input IssueLabelCreateInput { name: String! teamId: String color: String description: String }
 input ProjectCreateInput { name: String! description: String teamIds: [String!] leadId: String state: String color: String icon: String startDate: TimelessDate targetDate: TimelessDate }
 input ProjectUpdateInput { name: String description: String leadId: String state: String color: String icon: String startDate: TimelessDate targetDate: TimelessDate }
+input ProjectUpdateCreateInput { projectId: String! body: String! status: String }
 input AttachmentCreateInput { issueId: String! url: String! title: String! subtitle: String }

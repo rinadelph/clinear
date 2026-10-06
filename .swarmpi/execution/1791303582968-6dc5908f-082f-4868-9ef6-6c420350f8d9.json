@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "at": "2026-10-06T16:19:42.968Z",
+  "event": "bootstrap-result",
+  "runId": "1791303549728-call_0e10741bc581472dbba3029b3950b0d6",
+  "status": "complete",
+  "elapsedMs": 33232,
+  "memoryIds": [],
+  "skillNames": [
+    "python-repository-feature",
+    "git-commit-push"
+  ],
+  "taskPlan": {
+    "created": true,
+    "reused": true,
+    "existingFocusedTaskId": "1",
+    "tasks": [
+      {
+        "proposalKey": "1",
+        "taskId": "1",
+        "status": "updated"
+      },
+      {
+        "proposalKey": "T1",
+        "taskId": "2",
+        "status": "created"
+      },
+      {
+        "proposalKey": "T2",
+        "taskId": "3",
+        "status": "created"
+      },
+      {
+        "proposalKey": "T3",
+        "taskId": "4",
+        "status": "created"
+      },
+      {
+        "proposalKey": "T4",
+        "taskId": "5",
+        "status": "created"
+      }
+    ]
+  },
+  "tasksCommitted": 6
+}

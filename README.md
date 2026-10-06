@@ -1,13 +1,19 @@
-# Cliniar
+# Hoja
 
 > Self-hosted, offline-first, agent-native work management with a
 > Linear-compatible GraphQL interface.
 
-Cliniar combines a type-safe CLI, an optional MCP server, and a generic
+Hoja is a standalone, open-source Linear alternative: your organization
+owns the database and application. The product includes a first-party
+workspace UI at `/`, a Linear-compatible GraphQL backend, and clients for
+humans, agents, and automation. Linear Cloud is not required.
+
+Hoja combines a type-safe CLI, an optional MCP server, and a generic
 self-hosted backend. It is designed for humans, agents, and automation:
 responses are validated Pydantic models, commands compose in shell pipelines,
-and JSON output is the stable machine contract. Use the hosted Linear API or
-point the same client at a local SQLite or shared PostgreSQL deployment.
+and JSON output is the stable machine contract. Run it locally with SQLite or
+deploy it for a team with PostgreSQL; both modes use the same self-hosted
+backend and locally issued tokens.
 
 ```
 cliniar me                          # who am I?
@@ -52,16 +58,29 @@ uv pip install -e .
 
 ## Quick Start
 
-### 1. Get a token
+### 1. Install the self-hosted backend
 
-Generate a personal API key at <https://linear.app/settings/api>.
-
-### 2. Set it up
+The CLI is useful on its own, but the standalone product runs against the
+included backend. Install its optional server dependencies:
 
 ```bash
-export LINEAR_TOKEN="lin_api_..."
-# Or persist a config:
-cliniar init
+pip install 'cliniar[server]'
+```
+
+### 2. Create a local workspace
+
+```bash
+cliniar-serve seed --tenant local --org "Local Workspace" \
+  --org-key local --team-key ENG --email user@example.test
+cliniar-serve serve --tenant local --host 127.0.0.1 --port 8787
+```
+
+`seed` prints a locally issued token. Point the CLI at the local GraphQL
+endpoint, then persist the account with `cliniar init` if desired:
+
+```bash
+export LINEAR_API_URL="http://127.0.0.1:8787/graphql"
+export LINEAR_TOKEN="lin_api_..."  # token printed by seed
 ```
 
 ### 3. Verify
@@ -176,10 +195,11 @@ mkdir -p ~/.config/cliniar
 cp ~/.config/clinear/config.toml ~/.config/cliniar/config.toml
 ```
 
-### Self-hosted backend
+### Standalone backend
 
 Install `cliniar[server]` to run the Linear-compatible backend with either
-isolated SQLite files or a shared PostgreSQL database:
+isolated SQLite files or a shared PostgreSQL database. This backend is the
+standalone product runtime, not a hosted-service dependency:
 
 ```bash
 pip install 'cliniar[server]'
@@ -192,6 +212,19 @@ Point an account's `base_url` (or `LINEAR_API_URL`) at the resulting
 while `CLINIAR_APP_URL` controls the browser-facing issue and project links
 returned by the backend. See [the deployment guide](docs/DEPLOYMENT.md) for
 database precedence, multi-organization token provisioning, and health checks.
+
+### Self-hosted workspace UI
+
+For a PostgreSQL deployment:
+
+```bash
+docker compose up --build -d
+docker compose exec app cliniar-serve seed --org "Acme" --org-key acme \
+  --user "Admin" --email admin@example.com
+```
+
+Open `http://localhost:8787/` and paste the token printed by `seed`. The UI
+uses the local GraphQL backend and stores no cloud credentials.
 
 ---
 
@@ -215,8 +248,9 @@ database precedence, multi-organization token provisioning, and health checks.
 
 - Token read from `$LINEAR_TOKEN`, `--token` flag, or `config.toml`. Never logged in plaintext.
 - HTTPS-only. TLS verification mandatory.
-- No telemetry. Outbound API calls go only to the configured account endpoint
-  (`api.linear.app` by default, or an explicitly configured compatible backend).
+- No telemetry. The self-hosted CLI and UI send requests only to the configured
+  backend endpoint. The Linear-compatible schema and `LINEAR_*` names do not
+  imply a dependency on Linear Cloud.
 - Pre-commit hook blocks committing tokens, `.log` files, `.env` files. See `scripts/pre-commit.sh`.
 
 ---

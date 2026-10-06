@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "at": "2026-10-03T03:29:44.992Z",
+  "event": "bootstrap-result",
+  "runId": "1790998145144-call_VXOoFwgX88LG2dmhgPPJQp9Q",
+  "status": "complete",
+  "elapsedMs": 39828,
+  "memoryIds": [
+    "knowledge:repository:95e003e9-81fb-4707-910c-412e7a439433:0c0fa4f92f6e323f5513df6cc740f08d:0001"
+  ],
+  "skillNames": [
+    "typescript-repository-feature",
+    "agent-browser"
+  ],
+  "taskPlan": {
+    "created": true,
+    "reused": false,
+    "existingFocusedTaskId": "191",
+    "tasks": [
+      {
+        "proposalKey": "T1",
+        "taskId": "192",
+        "status": "created"
+      },
+      {
+        "proposalKey": "T2",
+        "taskId": "193",
+        "status": "created"
+      },
+      {
+        "proposalKey": "T3",
+        "taskId": "194",
+        "status": "created"
+      },
+      {
+        "proposalKey": "T4",
+        "taskId": "195",
+        "status": "created"
+      },
+      {
+        "proposalKey": "T5",
+        "taskId": "196",
+        "status": "created"
+      }
+    ]
+  },
+  "tasksCommitted": 6
+}

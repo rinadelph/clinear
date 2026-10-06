@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "at": "2026-10-03T03:10:21.760Z",
+  "event": "bootstrap-result",
+  "runId": "1790996978015-call_SkPQOitcXxG3PXG4EV0kUX6a",
+  "status": "complete",
+  "elapsedMs": 43724,
+  "memoryIds": [],
+  "skillNames": [
+    "typescript-repository-feature"
+  ],
+  "taskPlan": {
+    "created": true,
+    "reused": false,
+    "existingFocusedTaskId": "174",
+    "tasks": [
+      {
+        "proposalKey": "T1",
+        "taskId": "175",
+        "status": "created"
+      },
+      {
+        "proposalKey": "T2",
+        "taskId": "176",
+        "status": "created"
+      },
+      {
+        "proposalKey": "T3",
+        "taskId": "177",
+        "status": "created"
+      },
+      {
+        "proposalKey": "T4",
+        "taskId": "178",
+        "status": "created"
+      }
+    ]
+  },
+  "tasksCommitted": 5
+}
