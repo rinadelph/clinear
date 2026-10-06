@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "at": "2026-10-06T18:05:33.562Z",
+  "event": "bootstrap-result",
+  "runId": "1791309920748-call_22b5324578f1420aa95cfe602859f85a",
+  "status": "failed",
+  "elapsedMs": 12806,
+  "skillNames": [
+    "agent-browser",
+    "local-tmux-web-service"
+  ],
+  "taskPlan": {
+    "created": false,
+    "reused": false,
+    "existingFocusedTaskId": "18",
+    "tasks": []
+  },
+  "tasksCommitted": 0
+}

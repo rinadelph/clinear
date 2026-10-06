@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cliniar"
-version = "0.7.0"
+version = "0.21.4"
 description = "Self-hosted, offline-first, agent-native work management with Linear compatibility"
 readme = "README.md"
 license = { text = "MIT" }

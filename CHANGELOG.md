@@ -7,6 +7,249 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.21.4] — 2026-10-06
+
+### Added
+
+- Added authenticated workspace creation with creator membership and admin role.
+- Added workspace-selected login for identities with multiple workspace memberships.
+
+### Fixed
+
+- Surface rejected team creation responses in the workspace settings form.
+
+## [0.21.3] — 2026-10-06
+
+### Added
+
+- Added tenant-scoped team creation for workspace administrators.
+- Added an optional SMTP transport adapter (not yet wired to invitations).
+- Added GitHub integration, webhook, and feature-parity design documents.
+
+## [0.21.2] — 2026-10-01
+
+### Fixed
+
+- Added a real authenticated Retry for failed team-cycle settings reads,
+  guarded against stale callbacks and misleading enable state.
+
+## [0.21.1] — 2026-10-01
+
+### Fixed
+
+- Reject stale-clock cycle reconciliation before it can demote the persisted
+  Current pointer or rewrite completed cycle history.
+
+## [0.21.0] — 2026-10-01
+
+### Added
+
+- Added opt-in, admin-authorized automatic weekly team cycles with a chosen
+  start weekday, two upcoming cycles, local timezone boundaries and an
+  idempotent transactional reconciliation on authenticated reads.
+- Added team cycle settings and sidebar integration with explicit limits for
+  issue auto-assignment, edits and disablement in this first phase.
+
+## [0.20.2] — 2026-10-01
+
+### Fixed
+
+- Match team cycle routes before generic active-issue routes so Current
+  shows only its cycle; verify Current/Upcoming against isolated two-team data.
+
+## [0.20.1] — 2026-10-01
+
+### Fixed
+
+- Scope project lists to their team before cursor pagination; retrieve cycle
+  details by organization-scoped ID and count only matching cycle issues.
+- Preserve local per-team saved issue filters, route Team Home shortcuts to
+  their team, and dismiss Workspace More on outside activation.
+
+## [0.20.0] — 2026-10-01
+
+### Added
+
+- Added team Current/Upcoming cycle links backed by the existing active/next
+  cycle filters, with honest empty/error and selected-route states.
+- Routed team Home, Issues, Cycles, Projects and Views to team-keyed screens
+  with scoped data and explicit incomplete/unsupported cases.
+- Added a Workspace More menu for the backed Members screen and an honest
+  notice for unavailable customer/team-admin/sidebar-customization actions.
+
+## [0.19.1] — 2026-10-01
+
+### Fixed
+
+- Standardized the self-hosted Inter Variable compact-work typography across
+  Initiatives, Pulse, Inbox, My issues, Projects and Views, including 13px/500
+  section headers and consistent font fallback.
+- Restored the mobile navigation opener on Initiatives, Pulse and Inbox, and
+  aligned their desktop work-surface gutters without changing data flows.
+
+## [0.19.0] — 2026-10-01
+
+### Added
+
+- Added separate browser-local project and workspace Views drafts, Issues/Projects
+  view tabs, and locally favorited saved views with explicit scope notices.
+- Added team navigation links and a Create more option in the local issue composer.
+
+### Changed
+
+- Standardized project issue-list grouping, compact row typography and the
+  New issue composer layout against the observed Linear reference.
+
+## [0.18.1] — 2026-10-01
+
+### Fixed
+
+- Load a self-hosted Inter Variable font for Projects and match observed
+  Projects title, list-row, tab and detail typography and spacing.
+- Move local project editing behind an explicit control and give the overview
+  a compact properties column, update entry and readable description.
+
+## [0.18.0] — 2026-10-01
+
+### Added
+
+- Added real cursor pagination to workspace Projects and project-filtered issues,
+  plus a compact list/status board with supported filter and display controls.
+- Added project Overview/Activity/Issues navigation, real project update feed,
+  and a richer local project creation form with honest unsupported-field notices.
+
+### Fixed
+
+- Archived project details are no longer returned; missing project navigation
+  does not present stale detail data.
+
+## [0.17.0] — 2026-10-01
+
+### Added
+
+- Added organization-scoped Initiative records, project associations,
+  stable cursor listing, and create/update/archive GraphQL operations.
+- Replaced Initiatives placeholder with Active/Planned/All views, a scoped
+  create form, status filtering, description display, and honest empty states.
+
+## [0.16.0] — 2026-10-01
+
+### Added
+
+- Added recipient-scoped Inbox notifications for future issue creation and
+  changes, with stable paging, unread counts, mark-read, archive, and mark-all
+  actions; historical events are not reconstructed.
+- Replaced the generic Inbox issue dashboard with a responsive notification
+  feed, unread-only state, issue navigation, and honest empty/error states.
+
+## [0.15.1] — 2026-10-01
+
+### Fixed
+
+- Made project issue rows clickable and keyboard-accessible, opening the
+  selected issue with a contextual return to its project.
+
+## [0.15.0] — 2026-10-01
+
+### Added
+
+- Added authenticated project-update publication and a project-scoped Pulse
+  composer with required body, health, and duplicate-retry guidance.
+- Dogfooded the local project workflow with a started project, nine scoped
+  screen-work issues, and a published Pulse update.
+
+### Fixed
+
+- Moved the cramped project editor into page flow, expanded its description
+  field, added discard/unchanged-save handling, and separated Archive.
+
+## [0.14.0] — 2026-10-01
+
+### Added
+
+- Added an organization-scoped, paginated project-update post query with a
+  persisted revision-9 table, without synthesizing historical posts.
+- Replaced the Pulse placeholder with an accessible project-update feed,
+  responsive Recent/For me/Popular navigation, loading, empty/error and
+  load-more states. Unavailable ranking, subscriptions, comments, reactions
+  and custom views are explicitly disclosed rather than simulated.
+
+## [0.13.0] — 2026-10-01
+
+### Added
+
+- Matched the observed Linear sidebar new-issue button silhouette, dimensions,
+  light colors, hover, keyboard activation, and close-on-Escape behavior.
+- Replaced Hoja’s green brand palette with shared neutral light/dark tokens
+  across navigation, My issues, forms, cards, and actions, preserving semantic
+  status and error colors.
+
+## [0.12.0] — 2026-09-30
+
+### Added
+
+- Expanded My issues filters to labels, assignee, creator, subscriber, and
+  created/updated/due date ranges where the loaded issue fields allow it.
+- Added grouping by project, priority, cycle, label, and team plus persistent
+  assignee, priority, status, labels, and due-date column controls.
+
+### Fixed
+
+- Labeled filtered counts as loaded results while later pages remain available,
+  and returned to sign-in when an expired browser session is rejected.
+
+## [0.11.0] — 2026-09-30
+
+### Added
+
+- Added stable cursor pagination for GraphQL issues and a load-more control in
+  My issues, avoiding the previous silent first-100 result limit.
+- Added organization-scoped issue activity logging for new mutations and a
+  paginated My issues activity feed. Historical changes before migration are
+  explicitly unavailable.
+- Expanded My issues filters to team, project, cycle presence and content;
+  added configurable project/date columns and persistent display preferences.
+
+## [0.10.0] — 2026-09-30
+
+### Added
+
+- Aligned the My issues page shell with the observed Linear title, view tabs,
+  compact list groups, and light list surface.
+- Added working status/priority filters, focus/status grouping, collapsible
+  group counts, and date-grouped recent issue updates with clear disclosure
+  that this is not a complete activity history.
+
+### Fixed
+
+- Kept Assigned issues scoped to the viewer and excluded completed/canceled
+  issues from its active list; empty and filtered counts reflect visible data.
+
+## [0.9.0] — 2026-09-30
+
+### Added
+
+- Matched the Hoja navigation rail's width, compact rows, workspace header,
+  section order, and light selection treatment to the observed Linear sidebar.
+- Added sidebar-first Pulse, Initiatives, and favorite Views placeholders that
+  explicitly state they are not yet available, without replacing working Hoja
+  destinations.
+
+## [0.8.0] — 2026-09-22
+
+### Added
+
+- Added an initial first-party self-hosted workspace UI served by the local
+  backend, with token login, workspace/team navigation, issue listing, search,
+  and state filtering.
+- Added Docker Compose packaging for the application and PostgreSQL with
+  persistent storage and health checks.
+
+### Changed
+
+- Documented Cliniar as a standalone self-hosted product rather than only a
+  CLI client for Linear Cloud.
+
 ## [0.7.0] — 2026-07-26
 
 ### Changed

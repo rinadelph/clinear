@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "at": "2026-10-06T17:11:37.224Z",
+  "event": "bootstrap-result",
+  "runId": "1791306635288-call_99f53f101c9e4785b8cf713bce2cd340",
+  "status": "complete",
+  "elapsedMs": 61926,
+  "memoryIds": [],
+  "skillNames": [
+    "agent-browser",
+    "local-tmux-web-service"
+  ],
+  "taskPlan": {
+    "created": true,
+    "reused": true,
+    "existingFocusedTaskId": "17",
+    "tasks": [
+      {
+        "proposalKey": "T17",
+        "taskId": "17",
+        "status": "updated"
+      },
+      {
+        "proposalKey": "T17-reset",
+        "taskId": "18",
+        "status": "created"
+      },
+      {
+        "proposalKey": "T17-workspace",
+        "taskId": "19",
+        "status": "created"
+      },
+      {
+        "proposalKey": "T17-team-members",
+        "taskId": "20",
+        "status": "created"
+      }
+    ]
+  },
+  "tasksCommitted": 5
+}

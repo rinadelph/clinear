@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hoja</title>
+    <link rel="stylesheet" href="/assets/style.css" />
+  </head>
+  <body>
+    <main id="app">
+      <section id="login" class="card">
+        <div class="brand"><span class="mark">C</span><span>Hoja</span></div>
+        <h1>Your team's work, owned by you.</h1>
+        <p class="muted">Connect to your self-hosted workspace with an API token.</p>
+        <form id="login-form">
+          <label for="token">Workspace token</label>
+          <input id="token" type="password" autocomplete="current-password" placeholder="lin_api_…" required />
+          <button>Open workspace</button>
+          <p id="login-error" class="error" role="alert"></p>
+        </form>
+      </section>
+
+      <section id="workspace" hidden>
+        <header class="topbar">
+          <div class="brand"><span class="mark">C</span><span>Hoja</span></div>
+          <div class="top-actions"><span id="viewer"></span><button id="logout" class="ghost">Log out</button></div>
+        </header>
+        <div class="layout">
+          <aside class="sidebar">
+            <p class="eyebrow">Workspace</p>
+            <h2 id="workspace-name">Loading…</h2>
+            <nav><button class="nav active">Inbox</button><button class="nav">Projects</button><button class="nav">Cycles</button></nav>
+            <p class="eyebrow teams-label">Teams</p><div id="teams"></div>
+          </aside>
+          <section class="content">
+            <div class="content-head"><div><p class="eyebrow">Issues</p><h1>Inbox</h1></div><div><button id="new-issue">New issue</button><button id="refresh" class="secondary">Refresh</button></div></div>
+            <div class="filters"><input id="search" placeholder="Search issues…" /><select id="state-filter"><option value="">All states</option></select></div>
+            <div id="issues" class="issue-list"><p class="muted">Loading issues…</p></div>
+          </section>
+        </div>
+        <dialog id="issue-dialog">
+          <form id="issue-form">
+            <div class="dialog-head"><div><p class="eyebrow">Create</p><h2>New issue</h2></div><button type="button" id="close-dialog" class="close">×</button></div>
+            <label for="issue-title">Title</label><input id="issue-title" required maxlength="250" placeholder="What needs to be done?" />
+            <label for="issue-description">Description</label><textarea id="issue-description" rows="5" placeholder="Add context (optional)"></textarea>
+            <div class="form-row"><div><label for="issue-team">Team</label><select id="issue-team" required></select></div><div><label for="issue-priority">Priority</label><select id="issue-priority"><option value="0">No priority</option><option value="1">Urgent</option><option value="2">High</option><option value="3">Medium</option><option value="4">Low</option></select></div></div>
+            <p id="issue-error" class="error"></p><button id="create-issue" type="submit">Create issue</button>
+          </form>
+        </dialog>
+      </section>
+    </main>
+    <script src="/assets/app.js"></script>
+  </body>
+</html>

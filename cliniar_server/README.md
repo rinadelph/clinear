@@ -1,11 +1,24 @@
-# cliniar_server — local Linear-compatible backend
+# cliniar_server — self-hosted Linear-compatible backend
 
-A self-hosted GraphQL server that speaks the exact subset of the Linear API the
+A self-hosted GraphQL server and web UI that speaks the exact subset of the Linear API the
 `cliniar` CLI uses. Run `cliniar` **fully offline** against a single-file SQLite
 database or host many organizations in PostgreSQL, with **no rate limits**.
 
 > The CLI needs only one change to talk to it: an `accounts.<name>.base_url`
 > pointing at this server. Everything else is byte-for-byte identical.
+
+## Web UI
+
+The server now serves a first-party workspace UI at `/`. It authenticates with
+the same locally-issued API token as the CLI and never contacts Linear Cloud.
+For a team deployment, use the included Docker Compose setup:
+
+```bash
+docker compose up --build -d
+docker compose exec app cliniar-serve seed --org "Acme" --org-key acme --user "Admin" --email admin@example.com
+```
+
+Open `http://localhost:8787/` and paste the token printed by `seed`.
 
 ## Install
 
