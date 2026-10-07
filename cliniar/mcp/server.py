@@ -95,28 +95,13 @@ def _build_server():
         """
         return load_topic(topic)
 
-    @mcp.tool()
-    def clinear_guide(topic: Topic = Topic.OVERVIEW) -> CliniarGuide:
-        """Deprecated alias for `cliniar_guide` during the v0.7 bridge."""
-        return load_topic(topic)
-
     # ------------------------------------------------------------------
     # Resources — read-only Linear context
     # ------------------------------------------------------------------
-    @mcp.resource(
-        "clinear://me",
-        name="legacy-viewer",
-        description="Deprecated alias for cliniar://me.",
-    )
     @mcp.resource("cliniar://me", name="viewer", description="Currently-authenticated Linear user.")
     async def res_me() -> str:
         return await _resources.viewer()
 
-    @mcp.resource(
-        "clinear://issue/{id}",
-        name="legacy-issue",
-        description="Deprecated alias for cliniar://issue/{id}.",
-    )
     @mcp.resource(
         "cliniar://issue/{id}",
         name="issue",
@@ -126,11 +111,6 @@ def _build_server():
         return await _resources.issue(id)
 
     @mcp.resource(
-        "clinear://team/{key}",
-        name="legacy-team",
-        description="Deprecated alias for cliniar://team/{key}.",
-    )
-    @mcp.resource(
         "cliniar://team/{key}",
         name="team",
         description="Team detail + workflow states + members for a team key (e.g. ENG).",
@@ -138,11 +118,6 @@ def _build_server():
     async def res_team(key: str) -> str:
         return await _resources.team(key)
 
-    @mcp.resource(
-        "clinear://project/{id_or_slug}",
-        name="legacy-project",
-        description="Deprecated alias for cliniar://project/{id_or_slug}.",
-    )
     @mcp.resource(
         "cliniar://project/{id_or_slug}",
         name="project",
@@ -152,11 +127,6 @@ def _build_server():
         return await _resources.project(id_or_slug)
 
     @mcp.resource(
-        "clinear://cycle/current/{team_key}",
-        name="legacy-cycle-current",
-        description="Deprecated alias for cliniar://cycle/current/{team_key}.",
-    )
-    @mcp.resource(
         "cliniar://cycle/current/{team_key}",
         name="cycle-current",
         description="Active cycle for a team. Returns {active_cycle: null} when none.",
@@ -165,11 +135,6 @@ def _build_server():
         return await _resources.cycle_current(team_key)
 
     @mcp.resource(
-        "clinear://issues/mine",
-        name="legacy-issues-mine",
-        description="Deprecated alias for cliniar://issues/mine.",
-    )
-    @mcp.resource(
         "cliniar://issues/mine",
         name="issues-mine",
         description="Open issues assigned to the viewer (Todo + In Progress).",
@@ -177,11 +142,6 @@ def _build_server():
     async def res_issues_mine() -> str:
         return await _resources.issues_mine()
 
-    @mcp.resource(
-        "clinear://issues/team/{team_key}",
-        name="legacy-issues-team",
-        description="Deprecated alias for cliniar://issues/team/{team_key}.",
-    )
     @mcp.resource(
         "cliniar://issues/team/{team_key}",
         name="issues-team",
@@ -218,7 +178,7 @@ def _build_server():
         return _prompts.issue_investigate(issue_id)
 
     logging.info(
-        "cliniar-mcp v%s ready (tools=2, resources=14, prompts=6)",
+        "cliniar-mcp v%s ready (tools=1, resources=7, prompts=6)",
         __version__,
     )
     return mcp

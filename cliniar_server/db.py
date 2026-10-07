@@ -28,8 +28,6 @@ from sqlalchemy import (
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import IntegrityError
 
-from cliniar.compat import env_value, warn_legacy
-
 metadata = MetaData()
 CURRENT_SCHEMA_REVISION = 12
 
@@ -426,12 +424,6 @@ def db_path_for(tenant: str) -> Path:
         or str(Path.home() / ".local" / "share")
     )
     canonical = base / "cliniar" / f"{tenant}.db"
-    legacy = base / "clinear" / f"{tenant}.db"
-    if canonical.exists():
-        return canonical
-    if legacy.exists():
-        warn_legacy(str(legacy), str(canonical))
-        return legacy
     canonical.parent.mkdir(parents=True, exist_ok=True)
     return canonical
 
@@ -445,7 +437,7 @@ def resolve_database_target(
     """Resolve explicit URL, environment URL, then the SQLite path fallback."""
     if database_url:
         return database_url
-    if env_url := env_value("CLINIAR_DATABASE_URL", "CLINEAR_DATABASE_URL"):
+    if env_url := os.environ.get("CLINIAR_DATABASE_URL"):
         return env_url
     return str(db_path if db_path is not None else db_path_for(tenant))
 
@@ -632,14 +624,7 @@ def seed_states_for_team(conn, org_id: str, team_id: str) -> str:
 
 def app_url() -> str:
     """Browser-facing application base URL for generated entity links."""
-    return (
-        env_value(
-            "CLINIAR_APP_URL",
-            "CLINEAR_APP_URL",
-            "http://localhost:8787",
-        )
-        or "http://localhost:8787"
-    ).rstrip("/")
+    return os.environ.get("CLINIAR_APP_URL", "http://localhost:8787").rstrip("/")
 
 
 def entity_url(org_url_key: str, kind: str, entity_key: str) -> str:

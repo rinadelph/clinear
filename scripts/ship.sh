@@ -2,8 +2,7 @@
 # Build and publish a Cliniar release from an already-versioned, clean checkout.
 # This script does not create repositories, commits, or deployment-specific
 # configuration. Set CLINIAR_RELEASE_REPOSITORY only to override the current
-# GitHub remote. Set CLINIAR_CHECK_LEGACY_ARTIFACTS=1 for the one-release alias
-# compatibility check.
+# GitHub remote.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -40,12 +39,6 @@ WHEEL="dist/cliniar-${VERSION}-py3-none-any.whl"
 SDIST="dist/cliniar-${VERSION}.tar.gz"
 test -f "$WHEEL"
 test -f "$SDIST"
-
-if [ "${CLINIAR_CHECK_LEGACY_ARTIFACTS:-0}" = "1" ]; then
-    echo "==> Checking deprecated clinear aliases in canonical wheel"
-    unzip -p "$WHEEL" "cliniar-${VERSION}.dist-info/entry_points.txt" |
-        grep -Eq '^clinear(-mcp|-serve)?[[:space:]]*='
-fi
 
 awk -v version="$VERSION" '
     $0 ~ "^## \\[" version "\\]" { found=1; next }

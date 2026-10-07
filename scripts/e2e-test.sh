@@ -156,12 +156,6 @@ assert 'name: cliniar' in fm, 'name missing/incorrect'
 assert '\"cliniar\"' in fm, 'requires.bins must include cliniar'
 print('ok')"
 
-if [ "${CLINIAR_TEST_LEGACY_ALIASES:-0}" = "1" ]; then
-    run_test "legacy CLI alias (explicit compatibility check)" .venv/bin/clinear --version
-    run_test "legacy package alias (explicit compatibility check)" \
-        python3 -c "import clinear, clinear_server; print('ok')"
-fi
-
 echo ""
 echo "================================================================"
 echo "SUMMARY: $PASS passed, $FAIL failed"

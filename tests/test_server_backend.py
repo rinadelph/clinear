@@ -91,7 +91,7 @@ def test_make_engine_accepts_path_or_url(target) -> None:
 
 def test_make_engine_uses_psycopg3_and_redacts_passwords() -> None:
     pytest.importorskip("psycopg")
-    engine = make_engine("postgresql://user:secret@db.example.test/clinear")
+    engine = make_engine("postgresql://user:secret@db.example.test/cliniar")
     try:
         assert engine.dialect.name == "postgresql"
         assert engine.dialect.driver == "psycopg"
@@ -99,8 +99,8 @@ def test_make_engine_uses_psycopg3_and_redacts_passwords() -> None:
     finally:
         engine.dispose()
     assert display_database_target(
-        "postgresql://user:secret@db.example.test/clinear"
-    ) == "postgresql://user:***@db.example.test/clinear"
+        "postgresql://user:secret@db.example.test/cliniar"
+    ) == "postgresql://user:***@db.example.test/cliniar"
 
 
 def test_migrate_upgrades_a_recorded_prior_schema(tmp_path) -> None:
@@ -226,7 +226,7 @@ def test_shared_schema_isolates_organizations_and_rejects_duplicate_key(tmp_path
 def test_api_tokens_are_globally_unique_and_identity_consistent(tmp_path) -> None:
     engine = make_engine(tmp_path / "token-constraints.db")
     migrate(engine)
-    shared_token = "clinear_test_shared_token"
+    shared_token = "cliniar_test_shared_token"
     alpha = seed_tenant(
         engine,
         org_name="Alpha",
@@ -246,7 +246,7 @@ def test_api_tokens_are_globally_unique_and_identity_consistent(tmp_path) -> Non
         )
 
     beta = _seed(engine, name="Beta", key="beta", email="beta@example.test")
-    inconsistent_token = "clinear_test_inconsistent_identity"
+    inconsistent_token = "cliniar_test_inconsistent_identity"
     with engine.begin() as conn:
         conn.execute(
             api_key.insert().values(
@@ -658,7 +658,7 @@ def test_cloverops_graphql_operation_contract(tmp_path) -> None:
         tmp_path / "cloverops-contract.db"
     )
     suffix = uuid.uuid4().hex[:12]
-    contract_token = f"clinear_test_cloverops_contract_{suffix}"
+    contract_token = f"cliniar_test_cloverops_contract_{suffix}"
     engine = make_engine(target)
     migrate(engine)
     seeded = seed_tenant(

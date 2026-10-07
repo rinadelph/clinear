@@ -47,10 +47,10 @@ id_ed25519*
 
 # Project-specific
 schema/linear-schema.json
-clinear-debug.log
 .swarm/
 vendor/linear-kit/
 
 # Local runtime artifacts
+.cliniar/
 frontend/node_modules/
 .pi/agent-sessions/

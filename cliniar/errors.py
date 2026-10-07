@@ -105,7 +105,3 @@ class UsageError(CliniarError):
     """User supplied invalid arguments."""
 
     exit_code = ExitCode.USAGE_ERROR
-
-
-# Deprecated public alias for one compatibility release.
-ClinearError = CliniarError

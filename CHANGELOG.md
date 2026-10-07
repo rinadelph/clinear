@@ -11,117 +11,139 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Added authenticated workspace creation with creator membership and admin role.
-- Added workspace-selected login for identities with multiple workspace memberships.
+- Workspace admins can create a workspace and begin using it under their own
+  membership. Accounts with access to multiple workspaces can select the target
+  workspace during sign-in, avoiding an ambiguous account-to-workspace choice.
 
 ### Fixed
 
-- Surface rejected team creation responses in the workspace settings form.
+- Team creation now reports a rejected backend response in the settings form
+  instead of leaving the user without a clear result.
 
 ## [0.21.3] — 2026-10-06
 
 ### Added
 
-- Added tenant-scoped team creation for workspace administrators.
-- Added an optional SMTP transport adapter (not yet wired to invitations).
-- Added GitHub integration, webhook, and feature-parity design documents.
+- Workspace admins can create teams from Workspace settings; the new team and
+  its workflow states appear in the workspace navigation after a successful
+  response.
+- Added an SMTP transport adapter for future email workflows. Invitations do
+  not send email through this adapter yet.
+- Added GitHub integration, webhook, and feature-parity design proposals. These
+  documents describe possible future work; they do not indicate shipped
+  integrations.
 
 ## [0.21.2] — 2026-10-01
 
 ### Fixed
 
-- Added a real authenticated Retry for failed team-cycle settings reads,
-  guarded against stale callbacks and misleading enable state.
+- Team cycle settings now show a retry action after a failed read. The Enable
+  action stays disabled until settings load successfully, so a network failure
+  cannot be mistaken for an unsaved or disabled schedule.
+- A retry starts a fresh request and ignores stale responses from an earlier
+  settings read.
 
 ## [0.21.1] — 2026-10-01
 
 ### Fixed
 
-- Reject stale-clock cycle reconciliation before it can demote the persisted
-  Current pointer or rewrite completed cycle history.
+- Cycle reconciliation now rejects a clock value older than the saved cycle
+  boundary before changing the team's Current pointer or completed-cycle
+  history.
 
 ## [0.21.0] — 2026-10-01
 
 ### Added
 
-- Added opt-in, admin-authorized automatic weekly team cycles with a chosen
-  start weekday, two upcoming cycles, local timezone boundaries and an
-  idempotent transactional reconciliation on authenticated reads.
-- Added team cycle settings and sidebar integration with explicit limits for
-  issue auto-assignment, edits and disablement in this first phase.
+- Teams can opt into automatic weekly cycles. An administrator selects the
+  weekday; cycle boundaries use the team's timezone, with a Current cycle and
+  two Upcoming cycles reconciled transactionally when authenticated cycle data
+  is read.
+- Added team cycle settings and Current/Upcoming navigation.
+
+### Scope
+
+- Issue auto-assignment and rollover, schedule edits, and disabling an enabled
+  cadence are not available in this initial implementation.
 
 ## [0.20.2] — 2026-10-01
 
 ### Fixed
 
-- Match team cycle routes before generic active-issue routes so Current
-  shows only its cycle; verify Current/Upcoming against isolated two-team data.
+- Team Current and Upcoming cycle routes now apply the selected cycle filter
+  before the generic active-issue route, so each page shows issues from the
+  requested cycle rather than a broader active list.
 
 ## [0.20.1] — 2026-10-01
 
 ### Fixed
 
-- Scope project lists to their team before cursor pagination; retrieve cycle
-  details by organization-scoped ID and count only matching cycle issues.
-- Preserve local per-team saved issue filters, route Team Home shortcuts to
-  their team, and dismiss Workspace More on outside activation.
+- Project lists now apply the team filter before cursor pagination; cycle
+  details are looked up by organization-scoped ID and count only issues in that
+  cycle.
+- Team Home shortcuts now open that team, local issue-view preferences persist
+  per team, and the Workspace More menu closes when the user clicks elsewhere.
 
 ## [0.20.0] — 2026-10-01
 
 ### Added
 
-- Added team Current/Upcoming cycle links backed by the existing active/next
-  cycle filters, with honest empty/error and selected-route states.
-- Routed team Home, Issues, Cycles, Projects and Views to team-keyed screens
-  with scoped data and explicit incomplete/unsupported cases.
-- Added a Workspace More menu for the backed Members screen and an honest
-  notice for unavailable customer/team-admin/sidebar-customization actions.
+- Added team Home, Issues, Cycles, Projects, and Views destinations, with
+  Current and Upcoming cycle links backed by team-scoped data.
+- Added Workspace More access to Members. Actions without a backend or product
+  contract are identified as unavailable instead of appearing functional.
 
 ## [0.19.1] — 2026-10-01
 
 ### Fixed
 
-- Standardized the self-hosted Inter Variable compact-work typography across
-  Initiatives, Pulse, Inbox, My issues, Projects and Views, including 13px/500
-  section headers and consistent font fallback.
-- Restored the mobile navigation opener on Initiatives, Pulse and Inbox, and
-  aligned their desktop work-surface gutters without changing data flows.
+- Standardized compact typography and spacing across My issues, Inbox, Pulse,
+  Initiatives, Projects, and Views; restored the mobile navigation opener on
+  Inbox, Pulse, and Initiatives.
 
 ## [0.19.0] — 2026-10-01
 
 ### Added
 
-- Added separate browser-local project and workspace Views drafts, Issues/Projects
-  view tabs, and locally favorited saved views with explicit scope notices.
-- Added team navigation links and a Create more option in the local issue composer.
+- Added browser-local project and workspace issue views with separate scopes,
+  local favorites, and team navigation. These saved views are not shared with
+  other users or synchronized to the server.
+- Added a Create more option to the issue composer for entering several issues
+  in sequence.
 
 ### Changed
 
-- Standardized project issue-list grouping, compact row typography and the
-  New issue composer layout against the observed Linear reference.
+- Project issue lists now group by workflow state and use compact rows; the
+  issue composer has a centered layout and clearer save/cancel behavior.
 
 ## [0.18.1] — 2026-10-01
 
+### Changed
+
+- Project details now keep properties in a compact overview and open editing
+  only on request. The editor uses explicit Save and Discard actions, and
+  project updates are composed from the project Activity view.
+
 ### Fixed
 
-- Load a self-hosted Inter Variable font for Projects and match observed
-  Projects title, list-row, tab and detail typography and spacing.
-- Move local project editing behind an explicit control and give the overview
-  a compact properties column, update entry and readable description.
+- Loaded the Inter Variable font locally and aligned project titles, rows, and
+  tabs with the rest of the workspace typography.
 
 ## [0.18.0] — 2026-10-01
 
 ### Added
 
-- Added real cursor pagination to workspace Projects and project-filtered issues,
-  plus a compact list/status board with supported filter and display controls.
-- Added project Overview/Activity/Issues navigation, real project update feed,
-  and a richer local project creation form with honest unsupported-field notices.
+- Added cursor pagination to workspace projects and project-filtered issues,
+  with load-more controls rather than silently stopping at the first page.
+- Added project Overview, Activity, and Issues views, project update history,
+  and project creation fields supported by the backend.
+- Added a status board and supported filter/display controls. Counts and filters
+  describe loaded data while additional pages remain.
 
 ### Fixed
 
-- Archived project details are no longer returned; missing project navigation
-  does not present stale detail data.
+- Archived projects no longer appear in project detail results; unavailable
+  project routes show a missing-project state rather than stale details.
 
 ## [0.17.0] — 2026-10-01
 
