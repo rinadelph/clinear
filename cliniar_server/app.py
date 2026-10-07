@@ -124,6 +124,7 @@ def create_app(
         if token:
             key = store.resolve_token(token)
             if key:
+                store.touch_api_key(key["id"])
                 request.state.api_key_access = key["access"]
                 return key["user_id"], key["organization_id"], None, False
         if open_mode:

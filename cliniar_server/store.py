@@ -57,6 +57,20 @@ def _one(conn, stmt) -> dict | None:
     return dict(r._mapping) if r else None
 
 
+def _normalize_expiry(value: str | None):
+    """Return a UTC ISO timestamp, None for no expiry, or False when invalid or already past."""
+    if value is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    parsed = parsed.astimezone(timezone.utc)
+    return parsed.isoformat() if parsed > datetime.now(timezone.utc) else False
+
+
 class Store:
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
@@ -123,6 +137,8 @@ class Store:
                     and_(
                         api_key.c.token_hash == th,
                         api_key.c.revoked_at.is_(None),
+                        or_(api_key.c.expires_at.is_(None),
+                            api_key.c.expires_at > datetime.now(timezone.utc).isoformat()),
                         user.c.active.is_(True),
                         user.c.archived_at.is_(None),
                     )
@@ -130,23 +146,38 @@ class Store:
             )
             return row
 
+    def touch_api_key(self, key_id: str) -> None:
+        """Record use, at most once per hour, to avoid a write on every request."""
+        now = datetime.now(timezone.utc)
+        threshold = (now - timedelta(hours=1)).isoformat()
+        with self.engine.begin() as conn:
+            conn.execute(api_key.update().where(and_(
+                api_key.c.id == key_id,
+                or_(api_key.c.last_used_at.is_(None), api_key.c.last_used_at < threshold),
+            )).values(last_used_at=now.isoformat()))
+
     def list_api_keys(self, org_id: str, user_id: str) -> list[dict]:
         """Return metadata for this user's keys in the active workspace only."""
         with self.engine.connect() as conn:
             return _conn_rows(conn, select(
-                api_key.c.id, api_key.c.label,
-                api_key.c.access,
+                api_key.c.id, api_key.c.label, api_key.c.access, api_key.c.hint,
+                api_key.c.expires_at.label("expiresAt"),
+                api_key.c.last_used_at.label("lastUsedAt"),
                 api_key.c.created_at.label("createdAt"),
                 api_key.c.revoked_at.label("revokedAt"),
             ).where(and_(api_key.c.organization_id == org_id,
                          api_key.c.user_id == user_id)).order_by(api_key.c.created_at))
 
-    def create_api_key(self, org_id: str, user_id: str, label: str, access: str) -> tuple[dict, str] | None:
+    def create_api_key(self, org_id: str, user_id: str, label: str, access: str,
+                       expires_at: str | None = None) -> tuple[dict, str] | None:
         from cliniar_server.db import gen_token
         clean_label = label.strip()
         if not clean_label or len(clean_label) > 80:
             return None
         if access not in ("read", "read_write"):
+            return None
+        expires_at = _normalize_expiry(expires_at)
+        if expires_at is False:
             return None
         raw_token = gen_token()
         key_id = new_id()
@@ -158,8 +189,10 @@ class Store:
                 return None
             conn.execute(api_key.insert().values(
                 id=key_id, token_hash=token_hash(raw_token), label=clean_label,
-                access=access, user_id=user_id, organization_id=org_id, created_at=now))
-        return {"id": key_id, "label": clean_label, "access": access,
+                hint=raw_token[-4:], access=access, expires_at=expires_at,
+                user_id=user_id, organization_id=org_id, created_at=now))
+        return {"id": key_id, "label": clean_label, "access": access, "hint": raw_token[-4:],
+                "expiresAt": expires_at, "lastUsedAt": None,
                 "createdAt": now, "revokedAt": None}, raw_token
 
     def revoke_api_key(self, org_id: str, user_id: str, key_id: str) -> bool:

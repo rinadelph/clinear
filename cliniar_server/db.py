@@ -30,7 +30,7 @@ from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import IntegrityError
 
 metadata = MetaData()
-CURRENT_SCHEMA_REVISION = 16
+CURRENT_SCHEMA_REVISION = 17
 
 
 def now_iso() -> str:
@@ -116,6 +116,9 @@ api_key = Table(
     Column("token_hash", String, nullable=False, index=True),
     Column("label", String),
     Column("access", String, nullable=False, server_default="read_write"),
+    Column("hint", String),
+    Column("expires_at", String),
+    Column("last_used_at", String),
     Column("user_id", String, ForeignKey("user.id")),
     Column("organization_id", String, ForeignKey("organization.id")),
     Column("created_at", String),
@@ -689,6 +692,13 @@ def _apply_api_key_access(conn):
             "ALTER TABLE api_key ADD COLUMN access VARCHAR NOT NULL DEFAULT 'read_write'"
         )
 
+
+def _apply_api_key_lifecycle(conn):
+    existing = {c["name"] for c in inspect(conn).get_columns("api_key")}
+    for name, sql_type in (("hint", "VARCHAR"), ("expires_at", "VARCHAR"), ("last_used_at", "VARCHAR")):
+        if name not in existing:
+            conn.exec_driver_sql(f"ALTER TABLE api_key ADD COLUMN {name} {sql_type}")
+
 _MIGRATIONS = {
     1: lambda _conn: None,
     2: _apply_token_hash_uniqueness,
@@ -717,6 +727,7 @@ _MIGRATIONS = {
     ),
     15: _apply_oauth_security,
     16: _apply_api_key_access,
+    17: _apply_api_key_lifecycle,
 }
 
 

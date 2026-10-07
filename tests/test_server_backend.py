@@ -1657,3 +1657,28 @@ def test_read_only_api_key_is_selectable_and_blocks_mutations_and_sessions(tmp_p
     listed = {k["label"]: k["access"] for k in store.list_api_keys(seeded["org_id"], seeded["user_id"])}
     assert listed["Dashboard"] == "read"
     assert listed["CLI"] == "read_write"
+
+
+def test_api_key_expiry_hint_and_last_used_are_enforced(tmp_path) -> None:
+    from datetime import datetime, timedelta, timezone
+    engine = make_engine(tmp_path / "api-key-lifecycle.db")
+    migrate(engine)
+    seeded = seed_tenant(engine, org_name="Key Lifecycle", org_url_key="key-lifecycle",
+                         user_email="lifecycle-keys@example.test", token="lifecycle-seed-token",
+                         demo_issues=False)
+    store = Store(engine)
+    past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    future = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+    assert store.create_api_key(seeded["org_id"], seeded["user_id"], "Old", "read_write", past) is None
+    assert store.create_api_key(seeded["org_id"], seeded["user_id"], "Junk", "read_write", "not-a-date") is None
+    meta_ok, live_secret = store.create_api_key(seeded["org_id"], seeded["user_id"], "Current", "read_write", future)
+    assert store.resolve_token(live_secret) is not None
+    meta_forever, forever_secret = store.create_api_key(seeded["org_id"], seeded["user_id"], "Forever", "read_write")
+    assert store.resolve_token(forever_secret) is not None
+    store.touch_api_key(meta_ok["id"])
+    rows = {k["label"]: k for k in store.list_api_keys(seeded["org_id"], seeded["user_id"])}
+    assert rows["Current"]["lastUsedAt"] is not None
+    assert rows["Forever"]["lastUsedAt"] is None
+    assert rows["Current"]["expiresAt"] == future
+    assert rows["Forever"]["expiresAt"] is None
+    assert rows["Forever"]["hint"] == forever_secret[-4:]

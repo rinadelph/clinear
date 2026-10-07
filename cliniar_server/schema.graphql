@@ -15,6 +15,9 @@ type ApiKey {
   id: ID!
   label: String
   access: String
+  hint: String
+  expiresAt: DateTime
+  lastUsedAt: DateTime
   createdAt: DateTime
   revokedAt: DateTime
 }
@@ -108,7 +111,7 @@ type Query {
 }
 
 type Mutation {
-  apiKeyCreate(label: String!, access: String = "read_write"): ApiKeyPayload
+  apiKeyCreate(label: String!, access: String = "read_write", expiresAt: DateTime): ApiKeyPayload
   apiKeyRevoke(id: String!): Boolean!
   userPreferenceSet(key: String!, value: String!): UserPreferencesPayload!
   profileNameUpdate(name: String!): UserPayload
