@@ -25,7 +25,7 @@ cliniar -o json issue list | jq '.[].title'    # pipe into anything
 
 ---
 
-## Why Cliniar?
+## Why Hoja?
 
 - **Type-safe.** Every response validated through Pydantic v2. No silent schema drift.
 - **Agent-first.** Stable JSON contracts; pipe-friendly `-o ids` / `-o md` / `-o yaml`.
@@ -175,25 +175,6 @@ table_max_width = 120
 ```
 
 Run `cliniar init` to scaffold the file.
-
-### Migration from `clinear` (v0.7.0)
-
-The `clinear`, `clinear-mcp`, and `clinear-serve` executable aliases are
-deprecated but remain available for one release. New integrations must use
-`cliniar`, `cliniar-mcp`, and `cliniar-serve`.
-
-Cliniar reads `CLINIAR_*` variables and the canonical
-`~/.config/cliniar/config.toml` and `$XDG_DATA_HOME/cliniar/` locations first.
-For the same one-release transition it falls back to matching `CLINEAR_*`
-variables and legacy `~/.config/clinear/` and `$XDG_DATA_HOME/clinear/` paths
-when no canonical value exists. `LINEAR_TOKEN`, `LINEAR_API_URL`, Linear API
-field names, and GraphQL wire names are unchanged. Migrate files rather than
-maintaining two writable copies:
-
-```bash
-mkdir -p ~/.config/cliniar
-cp ~/.config/clinear/config.toml ~/.config/cliniar/config.toml
-```
 
 ### Standalone backend
 

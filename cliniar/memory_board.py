@@ -13,7 +13,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from cliniar.compat import warn_legacy
 from cliniar.config import _find_git_root
 from cliniar.errors import UsageError
 
@@ -54,16 +53,9 @@ def _now() -> str:
 
 
 def memory_path(start: Path | None = None) -> Path:
-    """Resolve canonical memory, falling back to an existing legacy board."""
+    """Resolve the canonical project memory board path."""
     root = _find_git_root(start) or Path.cwd()
-    canonical = root / ".cliniar" / "memory.yaml"
-    legacy = root / ".clinear" / "memory.yaml"
-    if canonical.exists():
-        return canonical
-    if legacy.exists():
-        warn_legacy(str(legacy), str(canonical))
-        return legacy
-    return canonical
+    return root / ".cliniar" / "memory.yaml"
 
 
 def _default_forced_entries() -> list[MemoryEntry]:

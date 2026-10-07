@@ -6,17 +6,15 @@ Cliniar is a standalone, generic, self-hosted, offline-first, agent-native
 work-management product with a Linear-compatible GraphQL interface. Do not encode a particular
 organization, repository owner, or deployment as a product default. New work
 uses `cliniar`, `cliniar-mcp`, `cliniar-serve`, `CLINIAR_*`, and `cliniar`
-config/data paths. The old commands, `CLINEAR_*`, and `clinear` paths are
-one-release compatibility fallbacks only. Preserve the wire-facing
+config/data paths. Preserve the wire-facing
 `LINEAR_TOKEN`, `LINEAR_API_URL`, and Linear GraphQL names.
 
 ---
 
 ## TL;DR (the rules)
 
-1. **Every change bumps the version.** Patch for bugfixes (0.3.0 → 0.3.1), minor for features (0.3.x → 0.4.0), major for breaking changes.
-2. **Every change updates `CHANGELOG.md`** under a new version heading.
-3. **Every change is tested.** Run `bash scripts/e2e-test.sh` before commit. All 36+ tests must pass.
+1. **Version and changelog follow release policy.** Update `VERSION`, `pyproject.toml`, and `CHANGELOG.md` for a release; do not bump versions for every local edit.
+2. **Run relevant checks.** Start with focused pytest tests and frontend build for affected areas; run the live API E2E script only when its required credentials and test data are configured.
 4. **Every commit goes through the pre-commit hook.** No secrets, no `.log`, no `.env`, no `schema/linear-schema.json`.
 5. **Every release gets a git tag (`vX.Y.Z`) and a GitHub release.** No exceptions.
 
@@ -71,7 +69,7 @@ cliniar/
 │   ├── pre-commit.sh          Secret-blocking pre-commit hook
 │   └── install-hooks.sh       Install pre-commit hook
 │
-└── tests/                     (TODO: pytest unit tests for v0.3)
+└── tests/                     Pytest regression tests
 ```
 
 ### Data flow for any command
@@ -96,8 +94,8 @@ User CLI input
 3. Write the GraphQL string in `cliniar/graphql/queries.py` or `mutations.py`. Use fragments from `fragments.py`.
 4. If the response shape is new, add or extend a Pydantic model in `cliniar/models/`.
 5. Register the new command group in `cliniar/cli.py` via `app.add_typer(...)`.
-6. Add an E2E test case in `scripts/e2e-test.sh`.
-7. Bump version. Update CHANGELOG.
+6. Add focused pytest coverage; update `scripts/e2e-test.sh` only for live end-to-end behavior.
+7. Update release metadata only when preparing a release.
 
 ### Adding a new model
 
@@ -187,9 +185,13 @@ The script reads `LINEAR_TOKEN` from your env. **It does not contain any hardcod
 
 Pass condition: `SUMMARY: N passed, 0 failed`.
 
-### Unit tests (TODO — v0.3)
+### Unit and regression tests
 
-`tests/` is empty as of v0.3.0. Planned with `pytest` + `respx` (mocks httpx) + Pydantic fixture data.
+The `tests/` directory contains pytest coverage for CLI account resolution and
+the backend, including optional PostgreSQL checks. Run `uv run pytest`; tests
+requiring optional services or drivers may skip when those dependencies are not
+installed. The live API matrix in `scripts/e2e-test.sh` is separate and requires
+`LINEAR_TOKEN`, `CLINIAR_TEST_TEAM`, and `CLINIAR_TEST_ISSUE`.
 
 ---
 

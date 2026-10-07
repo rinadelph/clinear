@@ -7,7 +7,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
-PYTHON="${CLINIAR_PYTHON:-${CLINEAR_PYTHON:-python3}}"
+PYTHON="${CLINIAR_PYTHON:-python3}"
 
 PORT="${PORT:-8796}"
 DB="/tmp/cliniar_e2e_$$.db"
@@ -27,8 +27,8 @@ trap cleanup EXIT
 
 : > "$ENVFILE"
 chmod 600 "$ENVFILE"
-if [ -n "${CLINIAR_DATABASE_URL:-${CLINEAR_DATABASE_URL:-}}" ]; then
-  printf 'export CLINIAR_DATABASE_URL=%q\n' "${CLINIAR_DATABASE_URL:-$CLINEAR_DATABASE_URL}" > "$ENVFILE"
+if [ -n "${CLINIAR_DATABASE_URL:-}" ]; then
+  printf 'export CLINIAR_DATABASE_URL=%q\n' "$CLINIAR_DATABASE_URL" > "$ENVFILE"
 fi
 
 echo "== seeding tenant =="

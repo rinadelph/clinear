@@ -68,7 +68,6 @@ class CliniarGuide(BaseModel):
 
 
 # Deprecated public model alias for one compatibility release.
-ClinearGuide = CliniarGuide
 
 
 # ---------------------------------------------------------------------------

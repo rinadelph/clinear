@@ -2,10 +2,7 @@
 
 Lookup order:
   1. $CLINIAR_CONFIG env var (absolute path)
-  2. $CLINEAR_CONFIG legacy env var
-  3. Existing $XDG_CONFIG_HOME/cliniar/config.toml
-  4. Existing $XDG_CONFIG_HOME/clinear/config.toml (legacy fallback)
-  5. New $XDG_CONFIG_HOME/cliniar/config.toml
+  2. Existing or new $XDG_CONFIG_HOME/cliniar/config.toml
 
 Token resolution order (per account):
   1. --token CLI flag (passed in)
@@ -40,7 +37,6 @@ except ImportError:  # pragma: no cover
 
 import contextlib
 
-from cliniar.compat import warn_legacy
 from cliniar.errors import AuthError, UsageError
 
 
@@ -52,9 +48,9 @@ class AccountConfig(BaseModel):
     token: str | None = None
     token_env: str = "LINEAR_TOKEN"
     org_name: str | None = None
-    # GraphQL endpoint override. Point this at a local clinear-serve backend
+    # GraphQL endpoint override. Point this at a local cliniar-serve backend
     # (e.g. "http://127.0.0.1:8787/graphql") to run fully offline. When unset,
-    # clinear talks to the real Linear API. $LINEAR_API_URL overrides this too.
+    # cliniar talks to the configured Linear-compatible API. $LINEAR_API_URL overrides this too.
     base_url: str | None = None
     # Team keys this account owns (e.g. ["SWA", "ENG"]). Used for intelligent
     # account auto-selection: a command targeting team SWA (via --team SWA or
@@ -105,18 +101,11 @@ def config_path() -> Path:
     """Resolve config file location."""
     if env_path := os.environ.get("CLINIAR_CONFIG"):
         return Path(env_path).expanduser().resolve()
-    if env_path := os.environ.get("CLINEAR_CONFIG"):
-        warn_legacy("CLINEAR_CONFIG", "CLINIAR_CONFIG")
-        return Path(env_path).expanduser().resolve()
     xdg = os.environ.get("XDG_CONFIG_HOME")
     base = Path(xdg).expanduser() if xdg else Path.home() / ".config"
     canonical = base / "cliniar" / "config.toml"
-    legacy = base / "clinear" / "config.toml"
     if canonical.exists():
         return canonical
-    if legacy.exists():
-        warn_legacy(str(legacy), str(canonical))
-        return legacy
     return canonical
 
 

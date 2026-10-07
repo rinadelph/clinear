@@ -21,8 +21,7 @@ SQLite support, and the psycopg 3 binary PostgreSQL driver.
 
 1. explicit `--database-url`;
 2. `CLINIAR_DATABASE_URL`;
-3. deprecated `CLINEAR_DATABASE_URL` when the canonical variable is unset;
-4. the existing `--db` path, or the SQLite path derived from `--tenant`.
+3. the existing `--db` path, or the SQLite path derived from `--tenant`.
 
 `--database-url` accepts a SQLAlchemy URL such as
 `postgresql+psycopg://USER:PASSWORD@DB_HOST:5432/DATABASE`. Do not place
@@ -49,9 +48,6 @@ cliniar-serve serve --tenant local --host 127.0.0.1 --port 8787
 Without `--db`, the canonical file is
 `$XDG_DATA_HOME/cliniar/<tenant>.db` or
 `~/.local/share/cliniar/<tenant>.db`.
-For the v0.7.x migration release only, an existing file under the corresponding
-`clinear/` data directory is used when no canonical file exists.
-
 `--open` is intended only for isolated local use. It resolves an identity only
 when the SQLite database contains exactly one organization and one user. It is
 disabled by ambiguity and never selects the first global user in PostgreSQL.

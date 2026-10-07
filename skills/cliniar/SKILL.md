@@ -17,10 +17,8 @@ self-hosted, offline-first, agent-native work management with Pydantic v2
 validation, six output formats, and a filter DSL.
 
 Use the canonical `cliniar`, `cliniar-mcp`, and `cliniar-serve` commands.
-The `clinear*` aliases, legacy `CLINEAR_*` variables, and legacy `clinear`
-config/data paths are deprecated one-release fallbacks. Do not use them in new
-commands. Keep the wire-facing `LINEAR_TOKEN`, `LINEAR_API_URL`, and Linear
-GraphQL names unchanged.
+Keep the wire-facing `LINEAR_TOKEN`, `LINEAR_API_URL`, and Linear GraphQL
+names unchanged.
 
 ## Agent Guidance
 

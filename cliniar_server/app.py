@@ -1,10 +1,10 @@
 """FastAPI + Ariadne ASGI app with token auth middleware.
 
-- POST /graphql : the Linear-compatible endpoint clinear talks to.
+- POST /graphql : the Linear-compatible endpoint the CLI talks to.
 - Auth: raw token in Authorization header (with or without 'Bearer').
   Unknown/revoked token → HTTP 401 + {errors:[{message}]}.
 - Never emits 429. GraphQL errors → HTTP 200 + {errors:[...], data:null}.
-- Optional OFFLINE mode: if CLINEAR_SERVER_OPEN=1, any token maps to the only
+- Optional OFFLINE mode: if CLINIAR_SERVER_OPEN=1, any token maps to the only
   seeded identity in an unambiguous SQLite database.
 """
 from __future__ import annotations
@@ -19,7 +19,6 @@ from starlette.routing import Route
 from pathlib import Path
 import os
 
-from cliniar.compat import env_value
 from cliniar_server.db import (
     make_engine,
     resolve_database_target,
@@ -58,9 +57,7 @@ def create_app(
     store = Store(engine)
     writer = Writer(engine)
     if open_mode is None:
-        open_mode = (
-            env_value("CLINIAR_SERVER_OPEN", "CLINEAR_SERVER_OPEN", "0") == "1"
-        )
+        open_mode = os.environ.get("CLINIAR_SERVER_OPEN", "0") == "1"
 
     def _auth(request: Request):
         raw = request.headers.get("authorization", "") or request.headers.get("Authorization", "")
@@ -96,8 +93,7 @@ def create_app(
         _success, result = await graphql(
             _schema, data, context_value=context,
             debug=(
-                env_value("CLINIAR_SERVER_DEBUG", "CLINEAR_SERVER_DEBUG", "0")
-                == "1"
+                os.environ.get("CLINIAR_SERVER_DEBUG", "0") == "1"
             ),
         )
         target = context.get("switch_target")

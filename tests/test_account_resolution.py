@@ -1,7 +1,7 @@
 """Unit tests for intelligent account/token resolution and WorkflowState.
 
 These tests are token-free and offline — they exercise the pure resolution
-logic in clinear.config plus the WorkflowState smart-union introduced to
+logic in cliniar.config plus the WorkflowState smart-union introduced to
 tolerate undocumented Linear workflow state types (e.g. "duplicate").
 """
 
