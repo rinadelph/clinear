@@ -1682,3 +1682,22 @@ def test_api_key_expiry_hint_and_last_used_are_enforced(tmp_path) -> None:
     assert rows["Current"]["expiresAt"] == future
     assert rows["Forever"]["expiresAt"] is None
     assert rows["Forever"]["hint"] == forever_secret[-4:]
+
+
+def test_read_write_api_key_can_create_issue_with_team_and_project(tmp_path) -> None:
+    db_path = tmp_path / "issue-create-api-key.db"
+    engine = make_engine(db_path)
+    migrate(engine)
+    seeded = seed_tenant(engine, org_name="Issue Key", org_url_key="issue-key",
+                         user_email="issue-key@example.test", token="issue-key-seed", demo_issues=False)
+    store = Store(engine)
+    _, secret = store.create_api_key(seeded["org_id"], seeded["user_id"], "Agent", "read_write")
+    headers = {"Authorization": f"Bearer {secret}"}
+    with TestClient(create_app(str(db_path), open_mode=False)) as client:
+        teams = client.post("/graphql", headers=headers, json={"query": "{teams{nodes{id key}}}"}).json()
+        team_id = teams["data"]["teams"]["nodes"][0]["id"]
+        created = client.post("/graphql", headers=headers, json={
+            "query": "mutation($i:IssueCreateInput!){issueCreate(input:$i){success issue{identifier}}}",
+            "variables": {"i": {"teamId": team_id, "title": "Agent issue"}}})
+        assert created.status_code == 200, created.text
+        assert created.json()["data"]["issueCreate"]["success"] is True
