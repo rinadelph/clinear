@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from ariadne import graphql
+from graphql import GraphQLError, OperationDefinitionNode, OperationType, parse
 from sqlalchemy import select, text
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -123,6 +124,7 @@ def create_app(
         if token:
             key = store.resolve_token(token)
             if key:
+                request.state.api_key_access = key["access"]
                 return key["user_id"], key["organization_id"], None, False
         if open_mode:
             uid, org = _first_identity(engine)
@@ -290,6 +292,21 @@ def create_app(
                 status_code=401,
             )
         data = await request.json()
+        if getattr(request.state, "api_key_access", "read_write") == "read":
+            try:
+                document = parse(data.get("query") or "")
+            except GraphQLError:
+                document = None
+            if document is not None and any(
+                isinstance(definition, OperationDefinitionNode)
+                and definition.operation == OperationType.MUTATION
+                for definition in document.definitions
+            ):
+                return JSONResponse(
+                    {"errors": [{"message": "This API key is read-only.",
+                                 "extensions": {"code": "FORBIDDEN"}}]},
+                    status_code=403,
+                )
         context = {
             "request": request,
             "store": store,
@@ -340,6 +357,10 @@ def create_app(
             setup_token = str(body.get("token", ""))
             setup_email = str(body.get("email", "")).strip().lower()
             identity = store.resolve_token(setup_token)
+            if identity and identity["access"] == "read":
+                return JSONResponse(
+                    {"error": "Read-only API keys cannot set a password."}, status_code=403
+                )
             if setup_email and identity:
                 with engine.connect() as conn:
                     account_email = conn.execute(
@@ -575,6 +596,10 @@ def create_app(
             identity = store.resolve_token(api_key_value)
             if not identity:
                 return JSONResponse({"error": "Invalid API key"}, status_code=401)
+            if identity["access"] == "read":
+                return JSONResponse(
+                    {"error": "Read-only API keys cannot open a browser session."}, status_code=403
+                )
             # When this identity belongs to several workspaces, an API key is
             # scoped to only one of them. Honor an explicit workspace selection
             # rather than silently creating a session in the key's workspace.

@@ -659,9 +659,9 @@ def m_workspace_update(_, info, input):
 
 
 @mutation.field("apiKeyCreate")
-def m_api_key_create(_, info, label):
+def m_api_key_create(_, info, label, access="read_write"):
     store, _w, org, uid = _ctx(info)
-    created = store.create_api_key(org, uid, label)
+    created = store.create_api_key(org, uid, label, access)
     if not created:
         return {"success": False, "apiKey": None, "secret": None}
     metadata, secret = created

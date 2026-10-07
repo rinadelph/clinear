@@ -997,7 +997,7 @@ def test_personal_api_key_lifecycle_is_scoped_and_secret_is_one_time(tmp_path) -
     seeded = seed_tenant(engine, org_name="Key Workspace", org_url_key="key-workspace",
                          user_email="keys@example.test", token="keys-seed-token", demo_issues=False)
     store = Store(engine)
-    created = store.create_api_key(seeded["org_id"], seeded["user_id"], "Laptop")
+    created = store.create_api_key(seeded["org_id"], seeded["user_id"], "Laptop", "read_write")
     assert created is not None
     metadata_row, secret = created
     assert secret.startswith("lin_api_")
@@ -1629,3 +1629,31 @@ def test_concurrent_first_run_bootstrap_only_creates_one_workspace(tmp_path) -> 
             assert conn.execute(select(user.c.id).where(user.c.admin.is_(True))).all().__len__() == 1
     finally:
         engine.dispose()
+
+
+def test_read_only_api_key_is_selectable_and_blocks_mutations_and_sessions(tmp_path) -> None:
+    db_path = tmp_path / "read-only-api-key.db"
+    engine = make_engine(db_path)
+    migrate(engine)
+    seeded = seed_tenant(engine, org_name="Read Only Keys", org_url_key="read-only-keys",
+                         user_email="readonly-keys@example.test", token="readonly-seed-token",
+                         demo_issues=False)
+    store = Store(engine)
+    _, read_secret = store.create_api_key(seeded["org_id"], seeded["user_id"], "Dashboard", "read")
+    _, write_secret = store.create_api_key(seeded["org_id"], seeded["user_id"], "CLI", "read_write")
+    assert store.create_api_key(seeded["org_id"], seeded["user_id"], "Bad", "admin") is None
+    read_headers = {"Authorization": f"Bearer {read_secret}"}
+    mutation = "mutation($label:String!){apiKeyCreate(label:$label){success}}"
+    with TestClient(create_app(str(db_path), open_mode=False)) as client:
+        read = client.post("/graphql", headers=read_headers, json={"query": "{viewer{id}}"}).json()
+        assert "errors" not in read
+        blocked = client.post("/graphql", headers=read_headers, json={
+            "query": mutation, "variables": {"label": "Nope"}})
+        assert blocked.status_code == 403
+        assert client.post("/auth/login", json={"apiKey": read_secret}).status_code == 403
+        write = client.post("/graphql", headers={"Authorization": f"Bearer {write_secret}"}, json={
+            "query": mutation, "variables": {"label": "Allowed"}}).json()
+        assert write["data"]["apiKeyCreate"]["success"] is True
+    listed = {k["label"]: k["access"] for k in store.list_api_keys(seeded["org_id"], seeded["user_id"])}
+    assert listed["Dashboard"] == "read"
+    assert listed["CLI"] == "read_write"

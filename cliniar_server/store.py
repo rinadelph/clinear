@@ -135,15 +135,18 @@ class Store:
         with self.engine.connect() as conn:
             return _conn_rows(conn, select(
                 api_key.c.id, api_key.c.label,
+                api_key.c.access,
                 api_key.c.created_at.label("createdAt"),
                 api_key.c.revoked_at.label("revokedAt"),
             ).where(and_(api_key.c.organization_id == org_id,
                          api_key.c.user_id == user_id)).order_by(api_key.c.created_at))
 
-    def create_api_key(self, org_id: str, user_id: str, label: str) -> tuple[dict, str] | None:
+    def create_api_key(self, org_id: str, user_id: str, label: str, access: str) -> tuple[dict, str] | None:
         from cliniar_server.db import gen_token
         clean_label = label.strip()
         if not clean_label or len(clean_label) > 80:
+            return None
+        if access not in ("read", "read_write"):
             return None
         raw_token = gen_token()
         key_id = new_id()
@@ -155,8 +158,9 @@ class Store:
                 return None
             conn.execute(api_key.insert().values(
                 id=key_id, token_hash=token_hash(raw_token), label=clean_label,
-                user_id=user_id, organization_id=org_id, created_at=now))
-        return {"id": key_id, "label": clean_label, "createdAt": now, "revokedAt": None}, raw_token
+                access=access, user_id=user_id, organization_id=org_id, created_at=now))
+        return {"id": key_id, "label": clean_label, "access": access,
+                "createdAt": now, "revokedAt": None}, raw_token
 
     def revoke_api_key(self, org_id: str, user_id: str, key_id: str) -> bool:
         with self.engine.begin() as conn:
