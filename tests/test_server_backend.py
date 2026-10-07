@@ -22,17 +22,17 @@ from cliniar_server.db import (
     attachment,
     cycle,
     display_database_target,
-    issue,
     global_identity,
     identity_credential,
+    issue,
     make_engine,
     metadata,
     migrate,
     new_id,
     now_iso,
+    organization_membership,
     project,
     project_team,
-    organization_membership,
     resolve_database_target,
     resolve_token_identity,
     schema_revision,
@@ -44,6 +44,146 @@ from cliniar_server.db import (
 )
 from cliniar_server.store import Store
 from cliniar_server.writer import InvalidReferenceError, Writer
+
+
+def test_oauth_pending_survives_provider_instance_and_binds_session(tmp_path) -> None:
+    pytest.importorskip("mcp")
+    from urllib.parse import parse_qs, urlparse
+
+    from mcp.server.auth.provider import AuthorizationParams
+    from mcp.shared.auth import OAuthClientInformationFull
+
+    from cliniar_server import db
+    from cliniar_server.mcp_oauth import READ_SCOPE, HojaOAuthProvider, _digest
+
+    path = tmp_path / "durable-oauth.db"
+    engine = make_engine(path)
+    migrate(engine)
+    _seed(engine, name="OAuth", key="oauth", email="oauth@example.test")
+    store = Store(engine)
+    first = HojaOAuthProvider(engine, store, True)
+    second = HojaOAuthProvider(make_engine(path), store, True)
+    client = OAuthClientInformationFull(client_id="client", redirect_uris=["https://client.test/cb"])
+    import asyncio
+    import os
+    os.environ["HOJA_TRUSTED_PUBLIC_HOST"] = "mcp.test"
+    with engine.begin() as conn:
+        conn.execute(db.oauth_client.insert().values(client_id="client", client_json=client.model_dump_json(), created_at=now_iso()))
+    params = AuthorizationParams(state="state", scopes=[READ_SCOPE], code_challenge="challenge", redirect_uri="https://client.test/cb", redirect_uri_provided_explicitly=True, resource="https://mcp.test/mcp")
+    path_url = asyncio.run(first.authorize(client, params))
+    pending_id = parse_qs(urlparse(path_url).query)["pending"][0]
+    with engine.connect() as conn:
+        pending = conn.execute(select(db.oauth_pending).where(db.oauth_pending.c.pending_hash == _digest(pending_id))).mappings().one()
+    assert pending["pending_hash"] != pending_id
+    assert pending["resource"] == params.resource
+    assert pending["client_id"] == "client" and pending["user_id"] is None
+    assert second.engine is not None
+    os.environ.pop("HOJA_TRUSTED_PUBLIC_HOST", None)
+
+
+def test_oauth_refresh_replay_revokes_family_and_persists_resource(tmp_path) -> None:
+    pytest.importorskip("mcp")
+    import asyncio
+
+    from mcp.server.auth.provider import TokenError
+    from mcp.shared.auth import OAuthClientInformationFull
+
+    from cliniar_server import db
+    from cliniar_server.mcp_oauth import READ_SCOPE, HojaOAuthProvider
+
+    engine = make_engine(tmp_path / "oauth-refresh.db")
+    migrate(engine)
+    tenant = _seed(engine, name="OAuth refresh", key="oauth-refresh", email="oauth-refresh@example.test")
+    provider = HojaOAuthProvider(engine, Store(engine), True)
+    client = OAuthClientInformationFull(client_id="refresh-client", redirect_uris=["https://client.test/cb"])
+    resource = "https://mcp.test/mcp"
+    with engine.begin() as conn:
+        conn.execute(db.oauth_client.insert().values(client_id=client.client_id, client_json=client.model_dump_json(), created_at=now_iso()))
+        initial = provider._mint_pair(conn, client.client_id, tenant["user_id"], tenant["org_id"], [READ_SCOPE], resource)
+    with engine.connect() as conn:
+        from cliniar_server.mcp_oauth import _digest
+        minted_refresh = conn.execute(select(db.oauth_refresh_token).where(db.oauth_refresh_token.c.token_hash == _digest(initial.refresh_token))).mappings().one()
+        assert minted_refresh["resource"] == resource
+    original = asyncio.run(provider.load_refresh_token(client, initial.refresh_token))
+    rotated = asyncio.run(provider.exchange_refresh_token(client, original, []))
+    latest_access = asyncio.run(provider.load_access_token(rotated.access_token))
+    rotated_refresh = asyncio.run(provider.load_refresh_token(client, rotated.refresh_token))
+    assert latest_access.resource == resource
+    assert rotated_refresh.resource == resource
+
+    with pytest.raises(TokenError):
+        asyncio.run(provider.exchange_refresh_token(client, original, []))
+    assert asyncio.run(provider.load_access_token(rotated.access_token)) is None
+    assert asyncio.run(provider.load_refresh_token(client, rotated.refresh_token)) is None
+    with engine.connect() as conn:
+        rows = conn.execute(select(db.oauth_access_token).where(db.oauth_access_token.c.grant_id == minted_refresh["grant_id"])).mappings().all()
+        refresh_rows = conn.execute(select(db.oauth_refresh_token).where(db.oauth_refresh_token.c.grant_id == minted_refresh["grant_id"])).mappings().all()
+    assert all(row["revoked_at"] for row in rows)
+    assert all(row["revoked_at"] for row in refresh_rows)
+
+
+def test_oauth_refresh_scope_escalation_keeps_original_usable(tmp_path) -> None:
+    pytest.importorskip("mcp")
+    import asyncio
+
+    from mcp.server.auth.provider import TokenError
+    from mcp.shared.auth import OAuthClientInformationFull
+
+    from cliniar_server import db
+    from cliniar_server.mcp_oauth import READ_SCOPE, WRITE_SCOPE, HojaOAuthProvider
+
+    engine = make_engine(tmp_path / "oauth-scope.db")
+    migrate(engine)
+    tenant = _seed(engine, name="OAuth scope", key="oauth-scope", email="oauth-scope@example.test")
+    provider = HojaOAuthProvider(engine, Store(engine), True)
+    client = OAuthClientInformationFull(client_id="scope-client", redirect_uris=["https://client.test/cb"])
+    with engine.begin() as conn:
+        conn.execute(db.oauth_client.insert().values(client_id=client.client_id, client_json=client.model_dump_json(), created_at=now_iso()))
+        initial = provider._mint_pair(conn, client.client_id, tenant["user_id"], tenant["org_id"], [READ_SCOPE], "https://mcp.test/mcp")
+    original = asyncio.run(provider.load_refresh_token(client, initial.refresh_token))
+    with pytest.raises(TokenError) as error:
+        asyncio.run(provider.exchange_refresh_token(client, original, [WRITE_SCOPE]))
+    assert error.value.error == "invalid_scope"
+    assert asyncio.run(provider.load_refresh_token(client, initial.refresh_token)) is not None
+
+
+def test_oauth_authorization_code_concurrent_redemption_is_single_use(tmp_path) -> None:
+    pytest.importorskip("mcp")
+    import asyncio
+    from datetime import datetime, timedelta, timezone
+
+    from mcp.server.auth.provider import TokenError
+    from mcp.shared.auth import OAuthClientInformationFull
+
+    from cliniar_server import db
+    from cliniar_server.mcp_oauth import READ_SCOPE, HojaOAuthProvider
+
+    engine = make_engine(tmp_path / "oauth-code-race.db")
+    migrate(engine)
+    tenant = _seed(engine, name="OAuth race", key="oauth-race", email="oauth-race@example.test")
+    provider = HojaOAuthProvider(engine, Store(engine), True)
+    client = OAuthClientInformationFull(client_id="race-client", redirect_uris=["https://client.test/cb"])
+    with engine.begin() as conn:
+        conn.execute(db.oauth_client.insert().values(client_id=client.client_id,
+            client_json=client.model_dump_json(), created_at=now_iso()))
+        provider._mint_pair(conn, client.client_id, tenant["user_id"], tenant["org_id"],
+                            [READ_SCOPE], "https://mcp.test/mcp")
+        code = "race-authorization-code"
+        from cliniar_server.mcp_oauth import _digest
+        conn.execute(db.oauth_authorization.insert().values(code_hash=_digest(code), client_id=client.client_id,
+            user_id=tenant["user_id"], organization_id=tenant["org_id"], scopes='["hoja:read"]',
+            code_challenge="challenge", redirect_uri="https://client.test/cb", resource="https://mcp.test/mcp",
+            expires_at=(datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(), consumed_at=None))
+    authorization = asyncio.run(provider.load_authorization_code(client, code))
+    assert authorization is not None
+    def redeem():
+        try:
+            return asyncio.run(provider.exchange_authorization_code(client, authorization))
+        except TokenError:
+            return None
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: redeem(), range(2)))
+    assert sum(result is not None for result in results) == 1
 
 
 def _seed(
@@ -78,6 +218,216 @@ def test_database_target_precedence(monkeypatch, tmp_path) -> None:
 
     monkeypatch.delenv("CLINIAR_DATABASE_URL")
     assert resolve_database_target(db_path=sqlite_path) == str(sqlite_path)
+
+
+def test_mcp_oauth_http_discovery_and_dynamic_registration(tmp_path) -> None:
+    pytest.importorskip("mcp")
+    from cliniar_server.db import make_engine, migrate
+
+    migrate(make_engine(tmp_path / "oauth-http.db"))
+    app = create_app(
+        db_path=str(tmp_path / "oauth-http.db"),
+        trusted_proxy_cidrs="127.0.0.1/32",
+        trusted_public_host="mcp.example.test",
+    )
+    with TestClient(app, base_url="https://mcp.example.test", client=("127.0.0.1", 44321)) as client:
+        authorization = client.get("/.well-known/oauth-authorization-server/mcp")
+        assert authorization.status_code == 200
+        auth_metadata = authorization.json()
+        assert auth_metadata["issuer"] == "https://mcp.example.test/mcp"
+        assert auth_metadata["authorization_endpoint"] == "https://mcp.example.test/mcp/authorize"
+        assert auth_metadata["registration_endpoint"] == "https://mcp.example.test/mcp/register"
+
+        protected = client.get("/.well-known/oauth-protected-resource/mcp")
+        assert protected.status_code == 200
+        resource_metadata = protected.json()
+        assert resource_metadata["resource"] == "https://mcp.example.test/mcp"
+        assert resource_metadata["authorization_servers"] == ["https://mcp.example.test/mcp"]
+
+        registration = client.post(
+            "/mcp/register", headers={"Host": "mcp.example.test"},
+            json={"redirect_uris": ["https://client.example/callback"], "token_endpoint_auth_method": "none"},
+        )
+        assert registration.status_code == 201
+        assert registration.json()["client_id"]
+
+        unsafe = client.post(
+            "/mcp/register", headers={"Host": "mcp.example.test"},
+            json={"redirect_uris": ["https://client.example/callback#fragment"], "token_endpoint_auth_method": "none"},
+        )
+        assert unsafe.status_code == 400
+
+
+def test_mcp_oauth_http_authorization_code_pkce_flow(tmp_path, monkeypatch) -> None:
+    pytest.importorskip("mcp")
+    import base64
+    import hashlib
+    import secrets
+    from urllib.parse import parse_qs, urlencode, urlparse
+
+    monkeypatch.setenv("HOJA_TRUSTED_PUBLIC_HOST", "mcp.example.test")
+    monkeypatch.setenv("HOJA_TRUSTED_PUBLIC_SCHEME", "https")
+
+    path = tmp_path / "oauth-pkce-http.db"
+    engine = make_engine(path)
+    migrate(engine)
+    seeded = seed_tenant(engine, org_name="OAuth Browser", org_url_key="oauth-browser",
+                         user_name="OAuth User", user_email="oauth-browser@example.test", demo_issues=False)
+    app = create_app(db_path=str(path), trusted_proxy_cidrs="127.0.0.1/32",
+                     trusted_public_host="mcp.example.test", open_mode=False)
+    with TestClient(app, base_url="https://mcp.example.test", client=("127.0.0.1", 44321), follow_redirects=False) as client:
+        assert client.post("/auth/setup", json={"token": seeded["token"],
+            "password": "correct horse battery"}).status_code == 201
+        login = client.post("/auth/login", json={"email": "oauth-browser@example.test",
+            "password": "correct horse battery"})
+        assert login.status_code == 200 and "hoja_session" in login.cookies
+
+        registered = client.post("/mcp/register", json={
+            "redirect_uris": ["https://client.example/callback"], "token_endpoint_auth_method": "none",
+        })
+        assert registered.status_code == 201
+        client_id = registered.json()["client_id"]
+        verifier = secrets.token_urlsafe(48)
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+        state = "state-value"
+        authorize = client.get("/mcp/authorize?" + urlencode({
+            "client_id": client_id, "response_type": "code", "redirect_uri": "https://client.example/callback",
+            "code_challenge": challenge, "code_challenge_method": "S256", "state": state,
+            "scope": "hoja:read", "resource": "https://mcp.example.test/mcp",
+        }))
+        assert authorize.status_code in (302, 303)
+        consent_url = authorize.headers["location"]
+        assert "/oauth/consent?" in consent_url
+        consent_path = "/mcp" + urlparse(consent_url).path.rstrip("/") + "?" + urlparse(consent_url).query
+        consent = client.get(consent_path, headers={"host": "mcp.example.test"})
+        assert consent.status_code == 200
+        assert "Authorize MCP client" in consent.text
+        import re
+        csrf = re.search(r'name=csrf_token value="([^"]+)"', consent.text).group(1)
+        denied = client.post(consent_path, data={"decision": "allow", "csrf_token": "wrong"},
+                             headers={"host": "mcp.example.test"})
+        assert denied.status_code == 400
+        approved = client.post(consent_path, data={"decision": "allow", "csrf_token": csrf},
+                               headers={"host": "mcp.example.test"})
+        assert approved.status_code in (302, 303, 307)
+        redirect = urlparse(approved.headers["location"])
+        result = parse_qs(redirect.query)
+        assert redirect.netloc == "client.example" and result["state"] == [state]
+        code = result["code"][0]
+
+        wrong = client.post("/mcp/token", data={"grant_type": "authorization_code", "client_id": client_id,
+            "code": code, "redirect_uri": "https://client.example/callback", "code_verifier": "incorrect"})
+        assert wrong.status_code == 400
+        token = client.post("/mcp/token", data={"grant_type": "authorization_code", "client_id": client_id,
+            "code": code, "redirect_uri": "https://client.example/callback", "code_verifier": verifier})
+        assert token.status_code == 200
+        assert token.json()["token_type"].lower() == "bearer"
+        assert token.json()["access_token"] and token.json()["refresh_token"]
+        replay = client.post("/mcp/token", data={"grant_type": "authorization_code", "client_id": client_id,
+            "code": code, "redirect_uri": "https://client.example/callback", "code_verifier": verifier})
+        assert replay.status_code == 400
+
+
+def test_mcp_http_rejects_missing_and_invalid_bearer_tokens(tmp_path) -> None:
+    pytest.importorskip("mcp")
+    from cliniar_server.db import make_engine, migrate
+
+    path = tmp_path / "oauth-calls.db"
+    migrate(make_engine(path))
+    _seed(make_engine(path), name="MCP calls", key="mcp-calls", email="mcp@example.test")
+    app = create_app(db_path=str(path), trusted_proxy_cidrs="127.0.0.1/32", trusted_public_host="mcp.example.test")
+    with TestClient(app) as client:
+        assert client.get("/mcp/", headers={"Host": "mcp.example.test"}).status_code in (401, 403)
+        assert client.get("/mcp/", headers={"Host": "mcp.example.test", "Authorization": "Bearer invalid"}).status_code in (401, 403)
+
+
+def test_mcp_streamable_http_lifecycle_and_host_validation(tmp_path) -> None:
+    pytest.importorskip("mcp")
+    from mcp.types import LATEST_PROTOCOL_VERSION
+
+    from cliniar_server import db
+    from cliniar_server.mcp_oauth import READ_SCOPE, HojaOAuthProvider
+
+    path = tmp_path / "mcp-sdk-lifecycle.db"
+    engine = make_engine(path)
+    migrate(engine)
+    tenant = _seed(engine, name="MCP lifecycle", key="mcp-life", email="mcp-life@example.test")
+    app = create_app(db_path=str(path), trusted_proxy_cidrs="127.0.0.1/32", trusted_public_host="mcp.example.test")
+    provider = HojaOAuthProvider(engine, Store(engine), True)
+    with engine.begin() as conn:
+        conn.execute(db.oauth_client.insert().values(client_id="synthetic", client_json='{"client_id":"synthetic","redirect_uris":["https://client.test/cb"],"token_endpoint_auth_method":"none"}', created_at=now_iso()))
+        token = provider._mint_pair(conn, "synthetic", tenant["user_id"], tenant["org_id"], [READ_SCOPE], "https://mcp.example.test/mcp")
+
+    with TestClient(app, base_url="https://mcp.example.test", client=("127.0.0.1", 44321)) as client:
+        headers = {"Host": "mcp.example.test", "Authorization": f"Bearer {token.access_token}"}
+        base = {"jsonrpc": "2.0", "id": 1}
+        init = client.post("/mcp/", headers=headers, json={**base, "method": "initialize", "params": {"protocolVersion": LATEST_PROTOCOL_VERSION, "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}}})
+        assert init.status_code == 200, init.text
+        envelope = {"_meta": {"io.modelcontextprotocol/protocolVersion": LATEST_PROTOCOL_VERSION, "io.modelcontextprotocol/clientCapabilities": {}}}
+        session_headers = {**headers, "MCP-Protocol-Version": LATEST_PROTOCOL_VERSION, "Mcp-Method": "tools/list"}
+        listed = client.post("/mcp/", headers=session_headers, json={**base, "id": 2, "method": "tools/list", "params": envelope})
+        assert listed.status_code == 200, listed.text
+        assert any(item["name"] == "hoja_viewer" for item in listed.json()["result"]["tools"])
+        call_headers = {**session_headers, "Mcp-Method": "tools/call", "Mcp-Name": "hoja_viewer"}
+        called = client.post("/mcp/", headers=call_headers, json={**base, "id": 3, "method": "tools/call", "params": {**envelope, "name": "hoja_viewer", "arguments": {"arguments": {}}}})
+        assert called.status_code == 200, called.text
+        assert not called.json()["result"].get("isError"), called.json()
+        denied = client.post("/mcp/", headers={**session_headers, "Mcp-Method": "tools/call", "Mcp-Name": "hoja_teamCreate"}, json={**base, "id": 4, "method": "tools/call", "params": {**envelope, "name": "hoja_teamCreate", "arguments": {"arguments": {"name": "No"}}}})
+        assert denied.status_code == 200 and denied.json()["result"].get("isError")
+        wrong_host = client.post("/mcp/", headers={**session_headers, "Host": "attacker.invalid"}, json={**base, "id": 5, "method": "tools/list", "params": envelope})
+        assert wrong_host.status_code == 421
+
+        with engine.begin() as conn:
+            conn.execute(db.oauth_access_token.update().where(db.oauth_access_token.c.token_hash == __import__("cliniar_server.mcp_oauth", fromlist=["_digest"])._digest(token.access_token)).values(revoked_at=now_iso()))
+        revoked = client.post("/mcp/", headers={**session_headers, "Mcp-Method": "tools/list"}, json={**base, "id": 6, "method": "tools/list", "params": envelope})
+        assert revoked.status_code in (401, 403)
+
+
+
+def test_app_starts_without_oauth_feature_configuration(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("HOJA_TRUSTED_PROXY_CIDRS", raising=False)
+    monkeypatch.delenv("HOJA_TRUSTED_PUBLIC_HOST", raising=False)
+    app = create_app(db_path=str(tmp_path / "oauth-disabled.db"))
+    with TestClient(app) as client:
+        assert client.get("/health").status_code == 200
+
+
+def test_oauth_trusted_proxy_cidr_and_public_host_fail_closed(tmp_path) -> None:
+    path = tmp_path / "oauth-proxy-boundary.db"
+    migrate(make_engine(path))
+    trusted = create_app(
+        db_path=str(path), trusted_proxy_cidrs="127.0.0.1/32",
+        trusted_public_host="mcp.example.test", open_mode=False,
+    )
+    with TestClient(trusted, client=("198.51.100.25", 44321)) as client:
+        # Forwarded headers do not upgrade an untrusted peer into a trusted proxy.
+        result = client.get(
+            "/.well-known/oauth-authorization-server/mcp",
+            headers={"X-Forwarded-For": "127.0.0.1", "X-Forwarded-Host": "mcp.example.test"},
+        )
+        assert result.status_code == 404
+
+    trusted_peer = create_app(
+        db_path=str(path), trusted_proxy_cidrs="127.0.0.1/32",
+        trusted_public_host="mcp.example.test", open_mode=False,
+    )
+    with TestClient(trusted_peer, client=("127.0.0.1", 44321)) as client:
+        assert client.get("/.well-known/oauth-authorization-server/mcp").status_code == 200
+        bad_host = client.get(
+            "/mcp/", headers={"Host": "attacker.example.test", "X-Forwarded-Host": "mcp.example.test"}
+        )
+        assert bad_host.status_code == 421
+
+    with pytest.raises(ValueError, match="HOJA_TRUSTED_PROXY_CIDRS"):
+        create_app(db_path=str(path), trusted_proxy_cidrs="not-a-network",
+                   trusted_public_host="mcp.example.test", open_mode=False)
+
+    invalid_host = create_app(
+        db_path=str(path), trusted_proxy_cidrs="127.0.0.1/32",
+        trusted_public_host="https://evil.example.test/path", open_mode=False,
+    )
+    with TestClient(invalid_host, client=("127.0.0.1", 44321)) as client:
+        assert client.get("/.well-known/oauth-authorization-server/mcp").status_code == 404
 
 
 @pytest.mark.parametrize("target", ["database.db", "sqlite:///:memory:"])
@@ -641,6 +991,127 @@ def test_team_create_graphql_admin_success_and_duplicate_key(tmp_path) -> None:
         assert duplicate["errors"][0]["extensions"]["code"] == "BAD_USER_INPUT"
 
 
+def test_personal_api_key_lifecycle_is_scoped_and_secret_is_one_time(tmp_path) -> None:
+    engine = make_engine(tmp_path / "personal-api-keys.db")
+    migrate(engine)
+    seeded = seed_tenant(engine, org_name="Key Workspace", org_url_key="key-workspace",
+                         user_email="keys@example.test", token="keys-seed-token", demo_issues=False)
+    store = Store(engine)
+    created = store.create_api_key(seeded["org_id"], seeded["user_id"], "Laptop")
+    assert created is not None
+    metadata_row, secret = created
+    assert secret.startswith("lin_api_")
+    assert "token_hash" not in metadata_row
+    assert store.list_api_keys(seeded["org_id"], seeded["user_id"])[-1]["label"] == "Laptop"
+    assert store.resolve_token(secret)["id"] == metadata_row["id"]
+    assert store.revoke_api_key(seeded["org_id"], seeded["user_id"], metadata_row["id"])
+    assert store.resolve_token(secret) is None
+    assert not store.revoke_api_key(seeded["org_id"], seeded["user_id"], metadata_row["id"])
+    assert not store.revoke_api_key("other-workspace", seeded["user_id"], metadata_row["id"])
+    assert store.list_api_keys(seeded["org_id"], seeded["user_id"])[-1]["revokedAt"]
+
+
+def test_user_preferences_persist_and_validate_values(tmp_path) -> None:
+    engine = make_engine(tmp_path / "user-preferences.db")
+    migrate(engine)
+    seeded = seed_tenant(engine, org_name="Preference Workspace", org_url_key="preference-workspace",
+                         user_email="prefs@example.test", token="prefs-seed-token", demo_issues=False)
+    store = Store(engine)
+    assert store.user_preferences(seeded["user_id"]) == {}
+    assert store.set_user_preference(seeded["user_id"], "theme", "dark")
+    assert store.set_user_preference(seeded["user_id"], "fontSize", "110")
+    assert store.user_preferences(seeded["user_id"]) == {"theme": "dark", "fontSize": "110"}
+    assert not store.set_user_preference(seeded["user_id"], "theme", "neon")
+    assert not store.set_user_preference(seeded["user_id"], "billing", "enterprise")
+    assert store.user_preferences(seeded["user_id"]) == {"theme": "dark", "fontSize": "110"}
+
+
+
+def test_user_preferences_graphql_roundtrip_and_invalid_value(tmp_path) -> None:
+    db_path = tmp_path / "preferences-graphql.db"
+    engine = make_engine(db_path)
+    migrate(engine)
+    seeded = seed_tenant(engine, org_name="Preference GraphQL", org_url_key="preferences-graphql",
+                         user_email="prefs-gql@example.test", token="prefs-gql-token", demo_issues=False)
+    headers = {"Authorization": f"Bearer {seeded['token']}"}
+    mutation = "mutation($key:String!,$value:String!){userPreferenceSet(key:$key,value:$value){success theme fontSize}}"
+    with TestClient(create_app(str(db_path), open_mode=False)) as client:
+        response = client.post("/graphql", headers=headers, json={
+            "query": mutation, "variables": {"key": "theme", "value": "dark"}}).json()
+        assert response["data"]["userPreferenceSet"] == {"success": True, "theme": "dark", "fontSize": "100"}
+    with TestClient(create_app(str(db_path), open_mode=False)) as client:
+        read = client.post("/graphql", headers=headers, json={
+            "query": "{myPreferences{success theme fontSize}}"}).json()
+        assert read["data"]["myPreferences"] == {"success": True, "theme": "dark", "fontSize": "100"}
+        invalid = client.post("/graphql", headers=headers, json={
+            "query": mutation, "variables": {"key": "theme", "value": "neon"}}).json()
+        assert invalid["data"]["userPreferenceSet"]["success"] is False
+        assert invalid["data"]["userPreferenceSet"]["theme"] == "dark"
+
+
+def test_profile_name_update_and_notification_preferences_filter_inbox(tmp_path) -> None:
+    engine = make_engine(tmp_path / "profile-notifications.db")
+    migrate(engine)
+    seeded = seed_tenant(engine, org_name="Profile Settings", org_url_key="profile-settings",
+                         user_email="settings@example.test", token="settings-token", demo_issues=False)
+    store = Store(engine)
+    assert store.update_profile_name(seeded["org_id"], seeded["user_id"], "  New Name  ")["name"] == "New Name"
+    assert store.update_profile_name(seeded["org_id"], seeded["user_id"], " ") is None
+    assert store.set_notification_preference(seeded["user_id"], "issueCreated", False)
+    assert not store.set_notification_preference(seeded["user_id"], "unknown", False)
+    from cliniar_server.db import inbox_notification
+    created_issue = Writer(engine).issue_create(seeded["org_id"], seeded["user_id"], {
+        "teamId": seeded["team_id"], "title": "Notification preference test"})
+    with engine.begin() as conn:
+        for kind in ("issueCreated", "issueUpdated"):
+            conn.execute(inbox_notification.insert().values(
+                id=new_id(), organization_id=seeded["org_id"], recipient_id=seeded["user_id"],
+                issue_id=created_issue, actor_id=None, kind=kind, created_at=now_iso()))
+    visible = store.inbox_notifications(seeded["org_id"], seeded["user_id"])
+    assert [item["kind"] for item in visible] == ["issueUpdated"]
+    assert store.inbox_unread_count(seeded["org_id"], seeded["user_id"]) == 1
+
+
+def test_profile_notification_and_label_settings_graphql_authorization(tmp_path) -> None:
+    db_path = tmp_path / "settings-graphql.db"
+    engine = make_engine(db_path)
+    migrate(engine)
+    seeded = seed_tenant(engine, org_name="Settings GraphQL", org_url_key="settings-graphql",
+                         user_email="settings-admin@example.test", token="settings-admin-token", demo_issues=False)
+    member, member_token = Store(engine).invite_member(seeded["org_id"], "Member", "settings-member@example.test")
+    assert member and member_token
+    admin_headers = {"Authorization": f"Bearer {seeded['token']}"}
+    member_headers = {"Authorization": f"Bearer {member_token}"}
+    with TestClient(create_app(str(db_path), open_mode=False)) as client:
+        renamed = client.post("/graphql", headers=admin_headers, json={
+            "query": "mutation($name:String!){profileNameUpdate(name:$name){success user{id name email}}}",
+            "variables": {"name": "Renamed admin"}}).json()
+        assert renamed["data"]["profileNameUpdate"]["user"]["name"] == "Renamed admin"
+        preference = client.post("/graphql", headers=admin_headers, json={
+            "query": "mutation($kind:String!,$enabled:Boolean!){notificationPreferenceSet(kind:$kind,enabled:$enabled){success issueCreated issueUpdated}}",
+            "variables": {"kind": "issueCreated", "enabled": False}}).json()
+        assert preference["data"]["notificationPreferenceSet"] == {
+            "success": True, "issueCreated": False, "issueUpdated": True}
+        created = client.post("/graphql", headers=admin_headers, json={
+            "query": "mutation($input:IssueLabelCreateInput!){issueLabelCreate(input:$input){success issueLabel{id name color}}}",
+            "variables": {"input": {"name": "Settings label", "color": "#345678"}}}).json()
+        label_id = created["data"]["issueLabelCreate"]["issueLabel"]["id"]
+        read = client.post("/graphql", headers=member_headers, json={
+            "query": "{issueLabelSettings{id name}}"}).json()
+        assert any(item["id"] == label_id for item in read["data"]["issueLabelSettings"])
+        denied_create = client.post("/graphql", headers=member_headers, json={
+            "query": "mutation($input:IssueLabelCreateInput!){issueLabelCreate(input:$input){success}}",
+            "variables": {"input": {"name": "Member cannot create"}}}).json()
+        assert denied_create["data"]["issueLabelCreate"]["success"] is False
+        denied_delete = client.post("/graphql", headers=member_headers, json={
+            "query": "mutation($id:String!){issueLabelDelete(id:$id){success}}",
+            "variables": {"id": label_id}}).json()
+        assert denied_delete["data"]["issueLabelDelete"]["success"] is False
+        deleted = client.post("/graphql", headers=admin_headers, json={
+            "query": "mutation($id:String!){issueLabelDelete(id:$id){success}}",
+            "variables": {"id": label_id}}).json()
+        assert deleted["data"]["issueLabelDelete"]["success"] is True
+
 def test_health_stays_available_when_schema_is_unmigrated(tmp_path) -> None:
     app = create_app(str(tmp_path / "unmigrated.db"), open_mode=False)
 
@@ -1062,3 +1533,99 @@ def test_workspace_members_and_admin_update_are_org_scoped(tmp_path) -> None:
     assert denied_invite["data"]["memberInvite"]["success"] is False
     assert denied_invite["data"]["memberInvite"]["apiKey"] is None
     assert gql(one["token"], "{ workspace { name } }")["data"]["workspace"]["name"] == "Renamed One"
+
+
+def test_first_run_onboarding_bootstraps_admin_session_and_disables_setup(tmp_path) -> None:
+    db_path = tmp_path / "onboarding.db"
+    migrate(make_engine(db_path))
+    client = TestClient(create_app(str(db_path), open_mode=False))
+    assert client.get("/onboarding/status").json() == {"initialized": False}
+
+    response = client.post("/onboarding/bootstrap", json={
+        "name": "First Admin", "email": "first@example.test",
+        "password": "correct horse battery", "workspaceName": "First Workspace",
+        "workspaceKey": "first-workspace", "teamName": "Engineering", "teamKey": "ENG",
+    })
+    assert response.status_code == 200
+    assert response.json()["status"] == "created"
+    assert response.json()["apiKey"].startswith("lin_api_")
+    assert response.cookies.get("hoja_session")
+    assert client.get("/onboarding/status").json() == {"initialized": True}
+    assert client.get("/auth/me").status_code == 200
+    assert client.post("/onboarding/bootstrap", json={
+        "name": "Other Admin", "email": "other@example.test",
+        "password": "another correct horse", "workspaceName": "Other",
+        "workspaceKey": "other", "teamName": "Other", "teamKey": "OTH",
+    }).status_code == 409
+
+
+def test_first_run_onboarding_rejects_invalid_password_without_initializing(tmp_path) -> None:
+    db_path = tmp_path / "onboarding-invalid.db"
+    migrate(make_engine(db_path))
+    client = TestClient(create_app(str(db_path), open_mode=False))
+    response = client.post("/onboarding/bootstrap", json={
+        "name": "First Admin", "email": "first@example.test", "password": "short",
+        "workspaceName": "First Workspace", "workspaceKey": "first-workspace",
+        "teamName": "Engineering", "teamKey": "ENG",
+    })
+    assert response.status_code == 400
+    assert client.get("/onboarding/status").json() == {"initialized": False}
+
+
+def test_new_member_invite_code_acceptance_sets_password_and_is_one_time(tmp_path) -> None:
+    db_path = tmp_path / "member-invite-code.db"
+    engine = make_engine(db_path)
+    migrate(engine)
+    seeded = seed_tenant(engine, org_name="Inviter", org_url_key="invite-code-test",
+                         user_name="Workspace Admin", user_email="admin-invite@example.test", demo_issues=False)
+    app = create_app(str(db_path), open_mode=False)
+    admin = TestClient(app)
+    assert admin.post("/auth/setup", json={"token": seeded["token"],
+        "password": "admin passphrase long"}).status_code == 201
+    assert admin.post("/auth/login", json={"email": "admin-invite@example.test",
+        "password": "admin passphrase long"}).status_code == 200
+    invite_response = admin.post("/graphql", json={"query":
+        "mutation($input:MemberInviteInput!){memberInvite(input:$input){success user{id email}}}",
+        "variables": {"input": {"name": "New Member", "email": "new-member@example.test"}}})
+    invited = invite_response.json()["data"]["memberInvite"]
+    code_response = admin.post("/graphql", json={"query":
+        "mutation($id:String!){membershipInvitationCreate(userId:$id){success inviteCode}}",
+        "variables": {"id": invited["user"]["id"]}})
+    code = code_response.json()["data"]["membershipInvitationCreate"]["inviteCode"]
+    recipient = TestClient(app)
+    mismatch = recipient.post("/auth/invite/accept", json={"code": code,
+        "email": "wrong@example.test", "password": "new member password"})
+    assert mismatch.status_code == 401
+    accepted = recipient.post("/auth/invite/accept", json={"code": code,
+        "email": "new-member@example.test", "password": "new member password"})
+    assert accepted.status_code == 200
+    assert accepted.cookies.get("hoja_session")
+    assert recipient.get("/auth/me").status_code == 200
+    reused = TestClient(app).post("/auth/invite/accept", json={"code": code,
+        "email": "new-member@example.test", "password": "another password"})
+    assert reused.status_code == 401
+
+
+def test_concurrent_first_run_bootstrap_only_creates_one_workspace(tmp_path) -> None:
+    db_path = tmp_path / "onboarding-race.db"
+    migrate(make_engine(db_path))
+    app = create_app(str(db_path), open_mode=False)
+    payload = {
+        "name": "First Admin", "email": "first@example.test",
+        "password": "correct horse battery", "workspaceName": "First Workspace",
+        "workspaceKey": "first-workspace", "teamName": "Engineering", "teamKey": "ENG",
+    }
+    def submit():
+        with TestClient(app) as client:
+            return client.post("/onboarding/bootstrap", json=payload).status_code
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        statuses = list(pool.map(lambda _: submit(), range(2)))
+    assert sorted(statuses) == [200, 409]
+    engine = make_engine(db_path)
+    try:
+        from cliniar_server.db import organization, user
+        with engine.connect() as conn:
+            assert conn.execute(select(organization.c.id)).all().__len__() == 1
+            assert conn.execute(select(user.c.id).where(user.c.admin.is_(True))).all().__len__() == 1
+    finally:
+        engine.dispose()

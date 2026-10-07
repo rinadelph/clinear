@@ -16,6 +16,7 @@ STDIO TRANSPORT NOTE: When running on stdio (the default), stdout is reserved
 for the JSON-RPC stream. ALL logging must go to stderr. We configure that at
 the top of this module before any other import that might log.
 """
+
 from __future__ import annotations
 
 import logging
@@ -45,26 +46,24 @@ def main() -> None:
     friendly install hint to stderr and exit 2.
     """
     try:
-        from mcp.server.fastmcp import FastMCP  # noqa: F401
+        from mcp.server.mcpserver import MCPServer  # noqa: F401
     except ImportError:
         sys.stderr.write(
-            "cliniar-mcp requires the [mcp] extra.\n"
-            "Install with:\n"
-            "  pip install 'cliniar[mcp]'\n"
+            "cliniar-mcp requires the [mcp] extra.\nInstall with:\n  pip install 'cliniar[mcp]'\n"
         )
         sys.exit(2)
 
-    _build_server().run(transport="stdio")
+    _build_server().run()
 
 
 def _build_server():
-    """Wire tools, resources, and prompts onto a FastMCP server."""
-    from mcp.server.fastmcp import FastMCP
+    """Wire tools, resources, and prompts onto an MCP v2 server."""
+    from mcp.server.mcpserver import MCPServer
 
     from cliniar import __version__
 
-    mcp = FastMCP(
-        "cliniar",
+    mcp = MCPServer(
+        name="cliniar",
         instructions=(
             "Use this server to learn how to drive Linear from a shell using "
             "the `cliniar` CLI. Call `cliniar_guide(topic)` BEFORE attempting "
@@ -169,7 +168,9 @@ def _build_server():
     def hand_off(issue_id: str, to_user: str, note: str = "") -> str:
         return _prompts.hand_off(issue_id, to_user, note)
 
-    @mcp.prompt(description="Review the current cycle for a team — done/in-progress/blockers/stale.")
+    @mcp.prompt(
+        description="Review the current cycle for a team — done/in-progress/blockers/stale."
+    )
     def cycle_review(team_key: str) -> str:
         return _prompts.cycle_review(team_key)
 

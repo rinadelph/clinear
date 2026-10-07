@@ -54,3 +54,7 @@ vendor/linear-kit/
 .cliniar/
 frontend/node_modules/
 .pi/agent-sessions/
+
+# Local-only E2E tooling
+local-e2e/
+.fastapi-reference/

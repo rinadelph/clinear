@@ -11,6 +11,32 @@ type Organization {
   urlKey: String!
 }
 
+type ApiKey {
+  id: ID!
+  label: String
+  createdAt: DateTime
+  revokedAt: DateTime
+}
+
+type ApiKeyPayload {
+  success: Boolean!
+  apiKey: ApiKey
+  secret: String
+}
+
+type UserPreferencesPayload {
+  success: Boolean!
+  theme: String
+  fontSize: String
+}
+
+
+type NotificationPreferencesPayload {
+  success: Boolean!
+  issueCreated: Boolean!
+  issueUpdated: Boolean!
+}
+
 type WorkspaceMembership {
   id: ID!
   organizationId: ID!
@@ -52,6 +78,10 @@ input MemberInviteInput {
 
 type Query {
   viewer: User
+  myApiKeys: [ApiKey!]!
+  myPreferences: UserPreferencesPayload!
+  myNotificationPreferences: NotificationPreferencesPayload!
+  issueLabelSettings: [IssueLabel!]!
   myWorkspaces: [WorkspaceMembership!]!
   organizationMembers(first: Int = 100): UserConnection
   workspace: Organization
@@ -77,6 +107,11 @@ type Query {
 }
 
 type Mutation {
+  apiKeyCreate(label: String!): ApiKeyPayload
+  apiKeyRevoke(id: String!): Boolean!
+  userPreferenceSet(key: String!, value: String!): UserPreferencesPayload!
+  profileNameUpdate(name: String!): UserPayload
+  notificationPreferenceSet(kind: String!, enabled: Boolean!): NotificationPreferencesPayload!
   workspaceCreate(input: WorkspaceCreateInput!): OrganizationPayload
   teamCreate(input: TeamCreateInput!): TeamPayload
   workspaceSwitch(organizationId: String!): OrganizationPayload

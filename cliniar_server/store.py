@@ -43,6 +43,7 @@ from cliniar_server.db import (
     token_hash,
     password_credential,
     user,
+    user_preference,
     workflow_state,
 )
 
@@ -59,6 +60,49 @@ def _one(conn, stmt) -> dict | None:
 class Store:
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
+
+    def is_initialized(self) -> bool:
+        """Whether this database already contains any workspace."""
+        with self.engine.connect() as conn:
+            return conn.execute(select(organization.c.id).limit(1)).first() is not None
+
+    def user_preferences(self, user_id: str) -> dict[str, str] | None:
+        """Read preference values for a verified user profile."""
+        with self.engine.connect() as conn:
+            if not conn.execute(select(user.c.id).where(
+                    user.c.id == user_id, user.c.active.is_(True),
+                    user.c.archived_at.is_(None))).first():
+                return None
+            rows = conn.execute(select(user_preference.c.preference_key,
+                                       user_preference.c.value).where(
+                user_preference.c.user_id == user_id)).all()
+            return {row.preference_key: row.value for row in rows}
+
+    def set_user_preference(self, user_id: str, preference_key: str, value: str) -> bool:
+        allowed = {"theme": {"light", "dark"}, "fontSize": {"90", "100", "110"},
+                   "notification:issueCreated": {"true", "false"},
+                   "notification:issueUpdated": {"true", "false"}}
+        if preference_key not in allowed or value not in allowed[preference_key]:
+            return False
+        now = datetime.now(timezone.utc).isoformat()
+        with self.engine.begin() as conn:
+            if not conn.execute(select(user.c.id).where(
+                    user.c.id == user_id, user.c.active.is_(True),
+                    user.c.archived_at.is_(None))).first():
+                return False
+            exists = conn.execute(select(user_preference.c.user_id).where(and_(
+                user_preference.c.user_id == user_id,
+                user_preference.c.preference_key == preference_key))).first()
+            if exists:
+                conn.execute(user_preference.update().where(and_(
+                    user_preference.c.user_id == user_id,
+                    user_preference.c.preference_key == preference_key)).values(
+                        value=value, updated_at=now))
+            else:
+                conn.execute(user_preference.insert().values(
+                    user_id=user_id, preference_key=preference_key,
+                    value=value, updated_at=now))
+        return True
 
     # ------------------------------------------------------------------ auth
     def resolve_token(self, token: str) -> dict | None:
@@ -85,6 +129,42 @@ class Store:
                 ),
             )
             return row
+
+    def list_api_keys(self, org_id: str, user_id: str) -> list[dict]:
+        """Return metadata for this user's keys in the active workspace only."""
+        with self.engine.connect() as conn:
+            return _conn_rows(conn, select(
+                api_key.c.id, api_key.c.label,
+                api_key.c.created_at.label("createdAt"),
+                api_key.c.revoked_at.label("revokedAt"),
+            ).where(and_(api_key.c.organization_id == org_id,
+                         api_key.c.user_id == user_id)).order_by(api_key.c.created_at))
+
+    def create_api_key(self, org_id: str, user_id: str, label: str) -> tuple[dict, str] | None:
+        from cliniar_server.db import gen_token
+        clean_label = label.strip()
+        if not clean_label or len(clean_label) > 80:
+            return None
+        raw_token = gen_token()
+        key_id = new_id()
+        now = datetime.now(timezone.utc).isoformat()
+        with self.engine.begin() as conn:
+            if not conn.execute(select(user.c.id).where(and_(
+                    user.c.id == user_id, user.c.organization_id == org_id,
+                    user.c.active.is_(True), user.c.archived_at.is_(None)))).first():
+                return None
+            conn.execute(api_key.insert().values(
+                id=key_id, token_hash=token_hash(raw_token), label=clean_label,
+                user_id=user_id, organization_id=org_id, created_at=now))
+        return {"id": key_id, "label": clean_label, "createdAt": now, "revokedAt": None}, raw_token
+
+    def revoke_api_key(self, org_id: str, user_id: str, key_id: str) -> bool:
+        with self.engine.begin() as conn:
+            result = conn.execute(api_key.update().where(and_(
+                api_key.c.id == key_id, api_key.c.organization_id == org_id,
+                api_key.c.user_id == user_id, api_key.c.revoked_at.is_(None),
+            )).values(revoked_at=datetime.now(timezone.utc).isoformat()))
+            return bool(result.rowcount)
 
     def create_browser_session_for_token(self, token: str, days: int = 14) -> tuple[str, dict] | None:
         """Create a browser session for the owner of a valid API key."""
@@ -540,6 +620,65 @@ class Store:
             return {"id": org_row["id"], "name": org_row["name"],
                     "urlKey": org_row["url_key"]} if org_row else None
 
+    def accept_new_member_invitation(self, raw: str, email: str,
+                                     password: str) -> tuple[str, dict] | None:
+        """Set credentials for a pre-created invited profile and consume its code."""
+        if len(password) < 12:
+            raise ValueError("Password must be at least 12 characters.")
+        now = datetime.now(timezone.utc)
+        salt = secrets.token_bytes(16)
+        digest = self._password_digest(password, salt)
+        identity_id = new_id()
+        session_token = secrets.token_urlsafe(48)
+        normalized_email = email.strip().lower()
+        with self.engine.begin() as conn:
+            invite = conn.execute(select(membership_invitation).where(and_(
+                membership_invitation.c.token_hash == token_hash(raw),
+                membership_invitation.c.accepted_at.is_(None),
+                membership_invitation.c.expires_at > now.isoformat(),
+            ))).mappings().first()
+            if not invite:
+                return None
+            profile = conn.execute(select(user).where(and_(
+                user.c.id == invite["profile_user_id"],
+                user.c.organization_id == invite["organization_id"],
+                user.c.active.is_(True), user.c.archived_at.is_(None),
+                user.c.email.ilike(normalized_email),
+            ))).mappings().first()
+            if not profile:
+                return None
+            membership = conn.execute(select(organization_membership).where(and_(
+                organization_membership.c.profile_user_id == profile["id"],
+                organization_membership.c.organization_id == invite["organization_id"],
+                organization_membership.c.active.is_(True),
+            ))).mappings().first()
+            if not membership:
+                return None
+            credential = conn.execute(select(identity_credential).where(
+                identity_credential.c.identity_id == membership["identity_id"])).first()
+            if credential:
+                return None
+            conn.execute(identity_credential.insert().values(
+                identity_id=membership["identity_id"], password_hash=digest,
+                created_at=now.isoformat(), updated_at=now.isoformat()))
+            conn.execute(membership_invitation.update().where(
+                membership_invitation.c.id == invite["id"]).values(
+                accepted_at=now.isoformat(), accepted_identity_id=membership["identity_id"]))
+            expires = now + timedelta(days=14)
+            conn.execute(browser_session.insert().values(
+                id=new_id(), token_hash=token_hash(session_token), user_id=profile["id"],
+                organization_id=invite["organization_id"], created_at=now.isoformat(),
+                expires_at=expires.isoformat()))
+            organization_row = conn.execute(select(organization).where(
+                organization.c.id == invite["organization_id"])).mappings().first()
+        if not organization_row:
+            return None
+        return session_token, {"user_id": profile["id"], "organization_id": invite["organization_id"],
+                               "identity_id": membership["identity_id"],
+                               "organization": {"id": organization_row["id"],
+                                                "name": organization_row["name"],
+                                                "urlKey": organization_row["url_key"]}}
+
     def organization_members(self, org_id: str) -> list[dict]:
         with self.engine.connect() as conn:
             return _conn_rows(conn, select(user).where(and_(
@@ -731,11 +870,16 @@ class Store:
     def inbox_notifications(self, org_id: str, user_id: str, after=None, limit=51,
                             unread_only=False, archived=False) -> list[dict]:
         with self.engine.connect() as conn:
+            disabled_kinds = [key.removeprefix("notification:") for key, value
+                              in self.user_preferences(user_id).items()
+                              if key.startswith("notification:") and value == "false"]
             stmt = select(inbox_notification).where(and_(
                 inbox_notification.c.organization_id == org_id,
                 inbox_notification.c.recipient_id == user_id,
                 inbox_notification.c.archived_at.is_not(None) if archived else inbox_notification.c.archived_at.is_(None),
             ))
+            if disabled_kinds:
+                stmt = stmt.where(inbox_notification.c.kind.not_in(disabled_kinds))
             if unread_only:
                 stmt = stmt.where(inbox_notification.c.read_at.is_(None))
             if after:
@@ -748,12 +892,39 @@ class Store:
     def inbox_unread_count(self, org_id: str, user_id: str) -> int:
         from sqlalchemy import func
         with self.engine.connect() as conn:
-            return conn.execute(select(func.count()).select_from(inbox_notification).where(and_(
+            conditions = [
                 inbox_notification.c.organization_id == org_id,
                 inbox_notification.c.recipient_id == user_id,
                 inbox_notification.c.read_at.is_(None),
                 inbox_notification.c.archived_at.is_(None),
-            ))).scalar_one()
+            ]
+            disabled_kinds = [key.removeprefix("notification:") for key, value
+                              in self.user_preferences(user_id).items()
+                              if key.startswith("notification:") and value == "false"]
+            if disabled_kinds:
+                conditions.append(inbox_notification.c.kind.not_in(disabled_kinds))
+            return conn.execute(select(func.count()).select_from(inbox_notification).where(
+                and_(*conditions))).scalar_one()
+
+    def update_profile_name(self, org_id: str, user_id: str, name: str) -> dict | None:
+        clean_name = name.strip()
+        if not clean_name or len(clean_name) > 80:
+            return None
+        with self.engine.begin() as conn:
+            result = conn.execute(user.update().where(and_(
+                user.c.id == user_id, user.c.organization_id == org_id,
+                user.c.active.is_(True), user.c.archived_at.is_(None),
+            )).values(name=clean_name, display_name=clean_name,
+                      updated_at=datetime.now(timezone.utc).isoformat()))
+            if not result.rowcount:
+                return None
+        return self.ser_user(self.get_user(org_id, user_id), user_id)
+
+    def set_notification_preference(self, user_id: str, kind: str, enabled: bool) -> bool:
+        if kind not in {"issueCreated", "issueUpdated"}:
+            return False
+        return self.set_user_preference(user_id, f"notification:{kind}",
+                                        "true" if enabled else "false")
 
     def inbox_mark(self, org_id: str, user_id: str, notification_id: str, column: str) -> bool:
         if column not in ("read_at", "archived_at"):

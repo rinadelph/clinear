@@ -1,4 +1,5 @@
 """SQLAlchemy Core storage, engine configuration, migration, and seeding."""
+
 from __future__ import annotations
 
 import hashlib
@@ -29,7 +30,7 @@ from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import IntegrityError
 
 metadata = MetaData()
-CURRENT_SCHEMA_REVISION = 12
+CURRENT_SCHEMA_REVISION = 15
 
 
 def now_iso() -> str:
@@ -56,7 +57,8 @@ def gen_session_token() -> str:
 # Tables
 # --------------------------------------------------------------------------
 organization = Table(
-    "organization", metadata,
+    "organization",
+    metadata,
     Column("id", String, primary_key=True),
     Column("name", String, nullable=False),
     Column("url_key", String, nullable=False, unique=True),
@@ -65,14 +67,16 @@ organization = Table(
 )
 
 global_identity = Table(
-    "global_identity", metadata,
+    "global_identity",
+    metadata,
     Column("id", String, primary_key=True),
     Column("email", String, nullable=False, index=True),
     Column("created_at", String, nullable=False),
 )
 
 organization_membership = Table(
-    "organization_membership", metadata,
+    "organization_membership",
+    metadata,
     Column("id", String, primary_key=True),
     Column("identity_id", String, ForeignKey("global_identity.id"), nullable=False, index=True),
     Column("organization_id", String, ForeignKey("organization.id"), nullable=False, index=True),
@@ -83,7 +87,8 @@ organization_membership = Table(
 )
 
 identity_credential = Table(
-    "identity_credential", metadata,
+    "identity_credential",
+    metadata,
     Column("identity_id", String, ForeignKey("global_identity.id"), primary_key=True),
     Column("password_hash", String, nullable=False),
     Column("created_at", String, nullable=False),
@@ -91,7 +96,8 @@ identity_credential = Table(
 )
 
 membership_invitation = Table(
-    "membership_invitation", metadata,
+    "membership_invitation",
+    metadata,
     Column("id", String, primary_key=True),
     Column("token_hash", String, nullable=False, unique=True, index=True),
     Column("organization_id", String, ForeignKey("organization.id"), nullable=False, index=True),
@@ -104,7 +110,8 @@ membership_invitation = Table(
 )
 
 api_key = Table(
-    "api_key", metadata,
+    "api_key",
+    metadata,
     Column("id", String, primary_key=True),
     Column("token_hash", String, nullable=False, index=True),
     Column("label", String),
@@ -115,7 +122,8 @@ api_key = Table(
 )
 
 password_credential = Table(
-    "password_credential", metadata,
+    "password_credential",
+    metadata,
     Column("user_id", String, ForeignKey("user.id"), primary_key=True),
     Column("password_hash", String, nullable=False),
     Column("created_at", String, nullable=False),
@@ -123,7 +131,8 @@ password_credential = Table(
 )
 
 browser_session = Table(
-    "browser_session", metadata,
+    "browser_session",
+    metadata,
     Column("id", String, primary_key=True),
     Column("token_hash", String, nullable=False, unique=True, index=True),
     Column("user_id", String, ForeignKey("user.id"), nullable=False, index=True),
@@ -133,14 +142,88 @@ browser_session = Table(
     Column("revoked_at", String),
 )
 
+oauth_client = Table(
+    "oauth_client",
+    metadata,
+    Column("client_id", String, primary_key=True),
+    Column("client_json", Text, nullable=False),
+    Column("created_at", String, nullable=False),
+)
+
+oauth_authorization = Table(
+    "oauth_authorization",
+    metadata,
+    Column("code_hash", String, primary_key=True),
+    Column("client_id", String, ForeignKey("oauth_client.client_id"), nullable=False, index=True),
+    Column("user_id", String, ForeignKey("user.id"), nullable=False, index=True),
+    Column("organization_id", String, ForeignKey("organization.id"), nullable=False, index=True),
+    Column("scopes", Text, nullable=False),
+    Column("code_challenge", String, nullable=False),
+    Column("redirect_uri", Text, nullable=False),
+    Column("expires_at", String, nullable=False, index=True),
+    Column("consumed_at", String),
+    Column("resource", Text),
+)
+
+oauth_pending = Table(
+    "oauth_pending", metadata,
+    Column("pending_hash", String, primary_key=True),
+    Column("client_id", String, ForeignKey("oauth_client.client_id"), nullable=False, index=True),
+    Column("user_id", String, ForeignKey("user.id"), index=True),
+    Column("organization_id", String, ForeignKey("organization.id"), index=True),
+    Column("scopes", Text, nullable=False), Column("code_challenge", String, nullable=False),
+    Column("redirect_uri", Text, nullable=False), Column("redirect_explicit", Boolean, nullable=False),
+    Column("state", Text), Column("csrf_token", String, nullable=False), Column("resource", Text),
+    Column("expires_at", String, nullable=False, index=True), Column("consumed_at", String),
+)
+
+oauth_access_token = Table(
+    "oauth_access_token",
+    metadata,
+    Column("token_hash", String, primary_key=True),
+    Column("client_id", String, ForeignKey("oauth_client.client_id"), nullable=False, index=True),
+    Column("user_id", String, ForeignKey("user.id"), nullable=False, index=True),
+    Column("organization_id", String, ForeignKey("organization.id"), nullable=False, index=True),
+    Column("scopes", Text, nullable=False),
+    Column("expires_at", String, nullable=False, index=True),
+    Column("grant_id", String, nullable=False, index=True),
+    Column("resource", Text),
+    Column("revoked_at", String),
+)
+
+oauth_refresh_token = Table(
+    "oauth_refresh_token",
+    metadata,
+    Column("token_hash", String, primary_key=True),
+    Column("client_id", String, ForeignKey("oauth_client.client_id"), nullable=False, index=True),
+    Column("user_id", String, ForeignKey("user.id"), nullable=False, index=True),
+    Column("organization_id", String, ForeignKey("organization.id"), nullable=False, index=True),
+    Column("scopes", Text, nullable=False),
+    Column("expires_at", String, nullable=False, index=True),
+    Column("grant_id", String, nullable=False, index=True),
+    Column("resource", Text),
+    Column("revoked_at", String),
+)
+
+user_preference = Table(
+    "user_preference",
+    metadata,
+    Column("user_id", String, ForeignKey("user.id"), primary_key=True),
+    Column("preference_key", String, primary_key=True),
+    Column("value", Text, nullable=False),
+    Column("updated_at", String, nullable=False),
+)
+
 schema_revision = Table(
-    "schema_revision", metadata,
+    "schema_revision",
+    metadata,
     Column("revision", Integer, primary_key=True),
     Column("applied_at", String, nullable=False),
 )
 
 user = Table(
-    "user", metadata,
+    "user",
+    metadata,
     Column("id", String, primary_key=True),
     Column("organization_id", String, ForeignKey("organization.id"), index=True),
     Column("name", String),
@@ -159,7 +242,8 @@ user = Table(
 )
 
 team = Table(
-    "team", metadata,
+    "team",
+    metadata,
     Column("id", String, primary_key=True),
     Column("organization_id", String, ForeignKey("organization.id"), index=True),
     Column("key", String, nullable=False),
@@ -186,7 +270,8 @@ team = Table(
 )
 
 workflow_state = Table(
-    "workflow_state", metadata,
+    "workflow_state",
+    metadata,
     Column("id", String, primary_key=True),
     Column("organization_id", String, ForeignKey("organization.id"), index=True),
     Column("team_id", String, ForeignKey("team.id"), index=True),
@@ -201,13 +286,15 @@ workflow_state = Table(
 )
 
 team_member = Table(
-    "team_member", metadata,
+    "team_member",
+    metadata,
     Column("team_id", String, ForeignKey("team.id"), primary_key=True),
     Column("user_id", String, ForeignKey("user.id"), primary_key=True),
 )
 
 issue = Table(
-    "issue", metadata,
+    "issue",
+    metadata,
     Column("id", String, primary_key=True),
     Column("organization_id", String, ForeignKey("organization.id"), index=True),
     Column("team_id", String, ForeignKey("team.id"), index=True),
@@ -238,7 +325,8 @@ issue = Table(
 )
 
 issue_label = Table(
-    "issue_label", metadata,
+    "issue_label",
+    metadata,
     Column("id", String, primary_key=True),
     Column("organization_id", String, ForeignKey("organization.id"), index=True),
     Column("team_id", String, ForeignKey("team.id")),
@@ -251,19 +339,22 @@ issue_label = Table(
 )
 
 issue_label_link = Table(
-    "issue_label_link", metadata,
+    "issue_label_link",
+    metadata,
     Column("issue_id", String, ForeignKey("issue.id"), primary_key=True),
     Column("label_id", String, ForeignKey("issue_label.id"), primary_key=True),
 )
 
 issue_subscriber = Table(
-    "issue_subscriber", metadata,
+    "issue_subscriber",
+    metadata,
     Column("issue_id", String, ForeignKey("issue.id"), primary_key=True),
     Column("user_id", String, ForeignKey("user.id"), primary_key=True),
 )
 
 comment = Table(
-    "comment", metadata,
+    "comment",
+    metadata,
     Column("id", String, primary_key=True),
     Column("organization_id", String, ForeignKey("organization.id"), index=True),
     Column("issue_id", String, ForeignKey("issue.id"), index=True),
@@ -276,7 +367,8 @@ comment = Table(
 )
 
 issue_activity = Table(
-    "issue_activity", metadata,
+    "issue_activity",
+    metadata,
     Column("id", String, primary_key=True),
     Column("organization_id", String, ForeignKey("organization.id"), nullable=False, index=True),
     Column("issue_id", String, ForeignKey("issue.id"), nullable=False, index=True),
@@ -287,25 +379,33 @@ issue_activity = Table(
 )
 
 initiative = Table(
-    "initiative", metadata,
+    "initiative",
+    metadata,
     Column("id", String, primary_key=True),
     Column("organization_id", String, ForeignKey("organization.id"), nullable=False, index=True),
-    Column("name", String, nullable=False), Column("summary", Text),
-    Column("status", String, nullable=False), Column("priority", Integer, nullable=False, default=0),
-    Column("owner_id", String, ForeignKey("user.id")), Column("creator_id", String, ForeignKey("user.id")),
-    Column("target_date", String), Column("created_at", String, nullable=False),
-    Column("updated_at", String, nullable=False), Column("archived_at", String),
+    Column("name", String, nullable=False),
+    Column("summary", Text),
+    Column("status", String, nullable=False),
+    Column("priority", Integer, nullable=False, default=0),
+    Column("owner_id", String, ForeignKey("user.id")),
+    Column("creator_id", String, ForeignKey("user.id")),
+    Column("target_date", String),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+    Column("archived_at", String),
 )
 
 initiative_project = Table(
-    "initiative_project", metadata,
+    "initiative_project",
+    metadata,
     Column("organization_id", String, ForeignKey("organization.id"), primary_key=True),
     Column("initiative_id", String, ForeignKey("initiative.id"), primary_key=True),
     Column("project_id", String, ForeignKey("project.id"), primary_key=True),
 )
 
 inbox_notification = Table(
-    "inbox_notification", metadata,
+    "inbox_notification",
+    metadata,
     Column("id", String, primary_key=True),
     Column("organization_id", String, ForeignKey("organization.id"), nullable=False, index=True),
     Column("recipient_id", String, ForeignKey("user.id"), nullable=False, index=True),
@@ -318,7 +418,8 @@ inbox_notification = Table(
 )
 
 attachment = Table(
-    "attachment", metadata,
+    "attachment",
+    metadata,
     Column("id", String, primary_key=True),
     Column("organization_id", String, ForeignKey("organization.id"), index=True),
     Column("issue_id", String, ForeignKey("issue.id"), index=True),
@@ -330,7 +431,8 @@ attachment = Table(
 )
 
 project = Table(
-    "project", metadata,
+    "project",
+    metadata,
     Column("id", String, primary_key=True),
     Column("organization_id", String, ForeignKey("organization.id"), index=True),
     Column("name", String, nullable=False),
@@ -351,7 +453,8 @@ project = Table(
 )
 
 project_update = Table(
-    "project_update", metadata,
+    "project_update",
+    metadata,
     Column("id", String, primary_key=True),
     Column("organization_id", String, ForeignKey("organization.id"), nullable=False, index=True),
     Column("project_id", String, ForeignKey("project.id"), nullable=False, index=True),
@@ -364,19 +467,22 @@ project_update = Table(
 )
 
 project_member = Table(
-    "project_member", metadata,
+    "project_member",
+    metadata,
     Column("project_id", String, ForeignKey("project.id"), primary_key=True),
     Column("user_id", String, ForeignKey("user.id"), primary_key=True),
 )
 
 project_team = Table(
-    "project_team", metadata,
+    "project_team",
+    metadata,
     Column("project_id", String, ForeignKey("project.id"), primary_key=True),
     Column("team_id", String, ForeignKey("team.id"), primary_key=True),
 )
 
 cycle = Table(
-    "cycle", metadata,
+    "cycle",
+    metadata,
     Column("id", String, primary_key=True),
     Column("organization_id", String, ForeignKey("organization.id"), index=True),
     Column("team_id", String, ForeignKey("team.id"), index=True),
@@ -419,10 +525,7 @@ def default_db_dir() -> Path:
 
 
 def db_path_for(tenant: str) -> Path:
-    base = Path(
-        os.environ.get("XDG_DATA_HOME")
-        or str(Path.home() / ".local" / "share")
-    )
+    base = Path(os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share"))
     canonical = base / "cliniar" / f"{tenant}.db"
     canonical.parent.mkdir(parents=True, exist_ok=True)
     return canonical
@@ -470,6 +573,7 @@ def make_engine(target: str | Path) -> Engine:
     eng = create_engine(url, **kwargs)
 
     if backend == "sqlite":
+
         @event.listens_for(eng, "connect")
         def _set_pragma(dbapi_conn, _):
             cur = dbapi_conn.cursor()
@@ -494,9 +598,7 @@ def _apply_token_hash_uniqueness(conn) -> None:
         )
     indexes = inspect(conn).get_indexes(api_key.name)
     if not any(index["name"] == "uq_api_key_token_hash" for index in indexes):
-        conn.exec_driver_sql(
-            "CREATE UNIQUE INDEX uq_api_key_token_hash ON api_key (token_hash)"
-        )
+        conn.exec_driver_sql("CREATE UNIQUE INDEX uq_api_key_token_hash ON api_key (token_hash)")
 
 
 def _apply_identity_memberships(conn) -> None:
@@ -508,21 +610,39 @@ def _apply_identity_memberships(conn) -> None:
     for profile in profiles:
         identity_id = new_id()
         created_at = profile.get("created_at") or now_iso()
-        conn.execute(global_identity.insert().values(
-            id=identity_id, email=(profile.get("email") or "").strip().lower(),
-            created_at=created_at))
-        conn.execute(organization_membership.insert().values(
-            id=new_id(), identity_id=identity_id,
-            organization_id=profile["organization_id"], profile_user_id=profile["id"],
-            active=bool(profile.get("active", True)) and profile.get("archived_at") is None,
-            created_at=created_at))
-        old_credential = conn.execute(select(password_credential).where(
-            password_credential.c.user_id == profile["id"])).mappings().first()
+        conn.execute(
+            global_identity.insert().values(
+                id=identity_id,
+                email=(profile.get("email") or "").strip().lower(),
+                created_at=created_at,
+            )
+        )
+        conn.execute(
+            organization_membership.insert().values(
+                id=new_id(),
+                identity_id=identity_id,
+                organization_id=profile["organization_id"],
+                profile_user_id=profile["id"],
+                active=bool(profile.get("active", True)) and profile.get("archived_at") is None,
+                created_at=created_at,
+            )
+        )
+        old_credential = (
+            conn.execute(
+                select(password_credential).where(password_credential.c.user_id == profile["id"])
+            )
+            .mappings()
+            .first()
+        )
         if old_credential:
-            conn.execute(identity_credential.insert().values(
-                identity_id=identity_id, password_hash=old_credential["password_hash"],
-                created_at=old_credential["created_at"],
-                updated_at=old_credential["updated_at"]))
+            conn.execute(
+                identity_credential.insert().values(
+                    identity_id=identity_id,
+                    password_hash=old_credential["password_hash"],
+                    created_at=old_credential["created_at"],
+                    updated_at=old_credential["updated_at"],
+                )
+            )
 
 
 def _apply_team_cadence(conn) -> None:
@@ -554,19 +674,40 @@ def _apply_team_cadence(conn) -> None:
         )
 
 
+
+def _apply_oauth_security(conn):
+    oauth_pending.create(conn, checkfirst=True)
+    for table in (oauth_authorization, oauth_access_token, oauth_refresh_token):
+        if "resource" not in {c["name"] for c in inspect(conn).get_columns(table.name)}:
+            conn.exec_driver_sql(f"ALTER TABLE {table.name} ADD COLUMN resource TEXT")
+
 _MIGRATIONS = {
     1: lambda _conn: None,
     2: _apply_token_hash_uniqueness,
     3: lambda conn: project_team.create(conn, checkfirst=True),
     4: lambda conn: attachment.create(conn, checkfirst=True),
-    5: lambda conn: (password_credential.create(conn, checkfirst=True), browser_session.create(conn, checkfirst=True)),
+    5: lambda conn: (
+        password_credential.create(conn, checkfirst=True),
+        browser_session.create(conn, checkfirst=True),
+    ),
     6: _apply_identity_memberships,
     7: lambda conn: membership_invitation.create(conn, checkfirst=True),
     8: lambda conn: issue_activity.create(conn, checkfirst=True),
     9: lambda conn: project_update.create(conn, checkfirst=True),
     10: lambda conn: inbox_notification.create(conn, checkfirst=True),
-    11: lambda conn: (initiative.create(conn, checkfirst=True), initiative_project.create(conn, checkfirst=True)),
+    11: lambda conn: (
+        initiative.create(conn, checkfirst=True),
+        initiative_project.create(conn, checkfirst=True),
+    ),
     12: _apply_team_cadence,
+    13: lambda conn: user_preference.create(conn, checkfirst=True),
+    14: lambda conn: (
+        oauth_client.create(conn, checkfirst=True),
+        oauth_authorization.create(conn, checkfirst=True),
+        oauth_access_token.create(conn, checkfirst=True),
+        oauth_refresh_token.create(conn, checkfirst=True),
+    ),
+    15: _apply_oauth_security,
 }
 
 
@@ -602,9 +743,7 @@ def migrate(engine: Engine) -> None:
     for revision in range(current + 1, CURRENT_SCHEMA_REVISION + 1):
         with engine.begin() as conn:
             _MIGRATIONS[revision](conn)
-            conn.execute(
-                schema_revision.insert().values(revision=revision, applied_at=now_iso())
-            )
+            conn.execute(schema_revision.insert().values(revision=revision, applied_at=now_iso()))
 
 
 def seed_states_for_team(conn, org_id: str, team_id: str) -> str:
@@ -613,10 +752,19 @@ def seed_states_for_team(conn, org_id: str, team_id: str) -> str:
     ts = now_iso()
     for name, stype, pos, color in SEED_STATES:
         sid = new_id()
-        conn.execute(workflow_state.insert().values(
-            id=sid, organization_id=org_id, team_id=team_id, name=name,
-            type=stype, color=color, position=float(pos), created_at=ts, updated_at=ts,
-        ))
+        conn.execute(
+            workflow_state.insert().values(
+                id=sid,
+                organization_id=org_id,
+                team_id=team_id,
+                name=name,
+                type=stype,
+                color=color,
+                position=float(pos),
+                created_at=ts,
+                updated_at=ts,
+            )
+        )
         if stype == "unstarted" and default_state_id is None:
             default_state_id = sid
     return default_state_id
@@ -638,11 +786,18 @@ def _default_org_url_key(org_name: str) -> str:
     return key
 
 
-def seed_tenant(engine: Engine, *, org_name: str = "Local",
-                org_url_key: str | None = None, team_key: str = "ENG",
-                team_name: str = "Engineering", user_name: str = "Local User",
-                user_email: str = "you@local", token: str | None = None,
-                demo_issues: bool = True) -> dict:
+def seed_tenant(
+    engine: Engine,
+    *,
+    org_name: str = "Local",
+    org_url_key: str | None = None,
+    team_key: str = "ENG",
+    team_name: str = "Engineering",
+    user_name: str = "Local User",
+    user_email: str = "you@local",
+    token: str | None = None,
+    demo_issues: bool = True,
+) -> dict:
     """Create one org, one admin user, one team (seeded states), an API token.
     Idempotent-ish: if the org already exists, returns existing token info is NOT
     possible (hash is one-way), so this is intended for fresh DBs.
@@ -661,34 +816,74 @@ def seed_tenant(engine: Engine, *, org_name: str = "Local",
                     "choose a unique --org-key."
                 )
             org_id = new_id()
-            conn.execute(organization.insert().values(
-                id=org_id, name=org_name, url_key=org_url_key,
-                created_at=ts, updated_at=ts,
-            ))
+            conn.execute(
+                organization.insert().values(
+                    id=org_id,
+                    name=org_name,
+                    url_key=org_url_key,
+                    created_at=ts,
+                    updated_at=ts,
+                )
+            )
             uid = new_id()
-            conn.execute(user.insert().values(
-                id=uid, organization_id=org_id, name=user_name, display_name=user_name,
-                email=user_email, active=True, admin=True,
-                url=entity_url(org_url_key, "profiles", uid),
-                timezone="UTC", created_at=ts, updated_at=ts,
-            ))
+            conn.execute(
+                user.insert().values(
+                    id=uid,
+                    organization_id=org_id,
+                    name=user_name,
+                    display_name=user_name,
+                    email=user_email,
+                    active=True,
+                    admin=True,
+                    url=entity_url(org_url_key, "profiles", uid),
+                    timezone="UTC",
+                    created_at=ts,
+                    updated_at=ts,
+                )
+            )
             if inspect(conn).has_table(global_identity.name):
                 identity_id = new_id()
-                conn.execute(global_identity.insert().values(
-                    id=identity_id, email=user_email.strip().lower(), created_at=ts))
-                conn.execute(organization_membership.insert().values(
-                    id=new_id(), identity_id=identity_id, organization_id=org_id,
-                    profile_user_id=uid, active=True, created_at=ts))
-            conn.execute(api_key.insert().values(
-                id=new_id(), token_hash=token_hash(token), label="seed",
-                user_id=uid, organization_id=org_id, created_at=ts,
-            ))
+                conn.execute(
+                    global_identity.insert().values(
+                        id=identity_id, email=user_email.strip().lower(), created_at=ts
+                    )
+                )
+                conn.execute(
+                    organization_membership.insert().values(
+                        id=new_id(),
+                        identity_id=identity_id,
+                        organization_id=org_id,
+                        profile_user_id=uid,
+                        active=True,
+                        created_at=ts,
+                    )
+                )
+            conn.execute(
+                api_key.insert().values(
+                    id=new_id(),
+                    token_hash=token_hash(token),
+                    label="seed",
+                    user_id=uid,
+                    organization_id=org_id,
+                    created_at=ts,
+                )
+            )
             tid = new_id()
-            conn.execute(team.insert().values(
-                id=tid, organization_id=org_id, key=team_key.upper(), name=team_name,
-                description=f"{team_name} team", color="#5e6ad2", private=False,
-                timezone="UTC", issue_counter=0, created_at=ts, updated_at=ts,
-            ))
+            conn.execute(
+                team.insert().values(
+                    id=tid,
+                    organization_id=org_id,
+                    key=team_key.upper(),
+                    name=team_name,
+                    description=f"{team_name} team",
+                    color="#5e6ad2",
+                    private=False,
+                    timezone="UTC",
+                    issue_counter=0,
+                    created_at=ts,
+                    updated_at=ts,
+                )
+            )
             conn.execute(team_member.insert().values(team_id=tid, user_id=uid))
             default_state_id = seed_states_for_team(conn, org_id, tid)
             conn.execute(
@@ -706,7 +901,13 @@ def seed_tenant(engine: Engine, *, org_name: str = "Local",
             f"Organization URL key '{org_url_key}' already exists; choose a unique --org-key."
         ) from exc
 
-    return {"token": token, "org_id": org_id, "user_id": uid, "team_id": tid, "team_key": team_key.upper()}
+    return {
+        "token": token,
+        "org_id": org_id,
+        "user_id": uid,
+        "team_id": tid,
+        "team_key": team_key.upper(),
+    }
 
 
 def _seed_demo_issues(conn, org_id, team_id, team_key, uid, state_id, org_url_key):
@@ -721,14 +922,26 @@ def _seed_demo_issues(conn, org_id, team_id, team_key, uid, state_id, org_url_ke
         n += 1
         iid = new_id()
         ident = f"{team_key}-{n}"
-        conn.execute(issue.insert().values(
-            id=iid, organization_id=org_id, team_id=team_id, number=n, identifier=ident,
-            title=title, description=desc, priority=prio, priority_label=PRIORITY_LABELS[prio],
-            state_id=state_id, creator_id=uid, assignee_id=uid,
-            url=entity_url(org_url_key, "issue", ident),
-            branch_name=f"{uid[:8]}/{ident.lower()}-{title.lower().replace(' ', '-')[:20]}",
-            created_at=ts, updated_at=ts,
-        ))
+        conn.execute(
+            issue.insert().values(
+                id=iid,
+                organization_id=org_id,
+                team_id=team_id,
+                number=n,
+                identifier=ident,
+                title=title,
+                description=desc,
+                priority=prio,
+                priority_label=PRIORITY_LABELS[prio],
+                state_id=state_id,
+                creator_id=uid,
+                assignee_id=uid,
+                url=entity_url(org_url_key, "issue", ident),
+                branch_name=f"{uid[:8]}/{ident.lower()}-{title.lower().replace(' ', '-')[:20]}",
+                created_at=ts,
+                updated_at=ts,
+            )
+        )
     conn.execute(team.update().where(team.c.id == team_id).values(issue_counter=n))
 
 
@@ -751,10 +964,12 @@ def resolve_token_identity(
     with engine.connect() as conn:
         if organization_ref:
             org_rows = conn.execute(
-                select(organization.c.id).where(
+                select(organization.c.id)
+                .where(
                     (organization.c.id == organization_ref)
                     | (organization.c.url_key == organization_ref)
-                ).limit(2)
+                )
+                .limit(2)
             ).all()
         else:
             org_rows = conn.execute(select(organization.c.id).limit(2)).all()

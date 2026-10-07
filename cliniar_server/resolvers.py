@@ -186,6 +186,41 @@ def r_viewer(_, info):
     return store.viewer(org, uid)
 
 
+@query.field("myApiKeys")
+def r_my_api_keys(_, info):
+    store, _w, org, uid = _ctx(info)
+    return store.list_api_keys(org, uid)
+
+
+def _preference_payload(store, uid, *, success=True):
+    values = store.user_preferences(uid)
+    if values is None:
+        return {"success": False, "theme": None, "fontSize": None}
+    return {"success": success, "theme": values.get("theme", "light"),
+            "fontSize": values.get("fontSize", "100")}
+
+
+@query.field("myPreferences")
+def r_my_preferences(_, info):
+    store, _w, _org, uid = _ctx(info)
+    return _preference_payload(store, uid)
+
+
+@query.field("myNotificationPreferences")
+def r_my_notification_preferences(_, info):
+    store, _w, _org, uid = _ctx(info)
+    prefs = store.user_preferences(uid) or {}
+    return {"success": True,
+            "issueCreated": prefs.get("notification:issueCreated", "true") == "true",
+            "issueUpdated": prefs.get("notification:issueUpdated", "true") == "true"}
+
+
+@query.field("issueLabelSettings")
+def r_issue_label_settings(_, info):
+    store, _w, org, _uid = _ctx(info)
+    return store.labels(org)
+
+
 @query.field("myWorkspaces")
 def r_my_workspaces(_, info):
     store, _w, org, uid = _ctx(info)
@@ -623,6 +658,46 @@ def m_workspace_update(_, info, input):
     return {"success": bool(updated), "organization": updated}
 
 
+@mutation.field("apiKeyCreate")
+def m_api_key_create(_, info, label):
+    store, _w, org, uid = _ctx(info)
+    created = store.create_api_key(org, uid, label)
+    if not created:
+        return {"success": False, "apiKey": None, "secret": None}
+    metadata, secret = created
+    return {"success": True, "apiKey": metadata, "secret": secret}
+
+
+@mutation.field("apiKeyRevoke")
+def m_api_key_revoke(_, info, id):
+    store, _w, org, uid = _ctx(info)
+    return store.revoke_api_key(org, uid, id)
+
+
+@mutation.field("userPreferenceSet")
+def m_user_preference_set(_, info, key, value):
+    store, _w, _org, uid = _ctx(info)
+    success = store.set_user_preference(uid, key, value)
+    return _preference_payload(store, uid, success=success)
+
+
+@mutation.field("profileNameUpdate")
+def m_profile_name_update(_, info, name):
+    store, _w, org, uid = _ctx(info)
+    updated = store.update_profile_name(org, uid, name)
+    return {"success": bool(updated), "user": updated, "apiKey": None}
+
+
+@mutation.field("notificationPreferenceSet")
+def m_notification_preference_set(_, info, kind, enabled):
+    store, _w, _org, uid = _ctx(info)
+    success = store.set_notification_preference(uid, kind, enabled)
+    prefs = store.user_preferences(uid) or {}
+    return {"success": success,
+            "issueCreated": prefs.get("notification:issueCreated", "true") == "true",
+            "issueUpdated": prefs.get("notification:issueUpdated", "true") == "true"}
+
+
 @mutation.field("workspaceSwitch")
 def m_workspace_switch(_, info, organizationId):
     store, _w, org, uid = _ctx(info)
@@ -736,7 +811,14 @@ def m_comment_delete(_, info, id):
 
 @mutation.field("issueLabelCreate")
 def m_label_create(_, info, input):
-    store, w, org, _uid = _ctx(info)
+    store, w, org, uid = _ctx(info)
+    actor = store.get_user(org, uid)
+    if not actor or not actor.get("admin"):
+        return {"success": False, "issueLabel": None}
+    name = str(input.get("name", "")).strip()
+    if not name or len(name) > 64:
+        return {"success": False, "issueLabel": None}
+    input = {**input, "name": name}
     lid = w.label_create(org, input)
     labels = store.labels(org)
     node = next((label for label in labels if label["id"] == lid), None)
@@ -745,7 +827,10 @@ def m_label_create(_, info, input):
 
 @mutation.field("issueLabelDelete")
 def m_label_delete(_, info, id):
-    _s, w, org, _uid = _ctx(info)
+    store, w, org, uid = _ctx(info)
+    actor = store.get_user(org, uid)
+    if not actor or not actor.get("admin"):
+        return {"success": False}
     return {"success": w.label_delete(org, id)}
 
 
