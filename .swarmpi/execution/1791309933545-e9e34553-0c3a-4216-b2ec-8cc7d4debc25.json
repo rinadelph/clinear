@@ -1,8 +1,0 @@
-{
-  "version": 1,
-  "at": "2026-10-06T18:05:33.545Z",
-  "event": "bootstrap-degraded",
-  "runId": "1791309920748-call_22b5324578f1420aa95cfe602859f85a",
-  "status": "degraded",
-  "errorSummary": "Expected ',' or ']' after array element in JSON at position 3095 (line 1 column 3096)"
-}

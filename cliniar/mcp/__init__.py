@@ -5,8 +5,8 @@ This package is **optional**. Install with:
     pip install 'cliniar[mcp]'
 
 The server exposes:
-  - 2 tools:      cliniar_guide(topic) plus a deprecated old-name alias
-  - 14 resources: canonical read-only URIs plus deprecated URI aliases
+  - 1 tool:       cliniar_guide(topic)
+  - 7 resources:  read-only workspace context
   - 6 prompts:    workflow templates (triage, daily-standup, hand-off, ...)
 
 It does NOT expose mutation tools by design. Mutations are performed via the
