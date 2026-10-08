@@ -549,6 +549,7 @@ def create_app(
             {
                 "status": "created",
                 "apiKey": raw_api_key,
+                "teamId": tid,
                 "workspace": {"id": org_id, "name": workspace_name, "urlKey": workspace_key},
             }
         )

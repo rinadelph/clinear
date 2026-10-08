@@ -230,6 +230,14 @@ class Writer:
                 default_state_id=default_state_id
             ))
             conn.execute(team_member.insert().values(team_id=tid, user_id=viewer_id))
+            for member_id in dict.fromkeys(inp.get("memberIds") or []):
+                if member_id == viewer_id:
+                    continue
+                if not conn.execute(select(user.c.id).where(and_(
+                    user.c.id == member_id, user.c.organization_id == org_id,
+                    user.c.active.is_(True), user.c.archived_at.is_(None)))).first():
+                    raise InvalidReferenceError("memberIds")
+                conn.execute(team_member.insert().values(team_id=tid, user_id=member_id))
             return tid
 
     def enable_team_cadence(self, org_id: str, team_id: str, weekday: int, *, now=None) -> dict:

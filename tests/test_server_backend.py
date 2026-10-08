@@ -1745,3 +1745,42 @@ def test_team_membership_is_granted_on_invite_and_managed_by_admins(tmp_path) ->
         bad_team = run("mutation($i:MemberInviteInput!){memberInvite(input:$i){success}}",
                        {"i": {"name": "X", "email": "x-membership@example.test", "teamIds": ["missing"]}})
         assert bad_team.get("errors"), bad_team
+
+
+def test_team_create_adds_selected_members_and_rejects_unknown_ids(tmp_path) -> None:
+    db_path = tmp_path / "team-create-members.db"
+    engine = make_engine(db_path)
+    migrate(engine)
+    seeded = seed_tenant(engine, org_name="Team Create", org_url_key="team-create",
+                         user_email="team-admin@example.test", token="team-create-seed", demo_issues=False)
+    token = seeded["token"]
+    with TestClient(create_app(str(db_path), open_mode=False)) as client:
+        def run(query, variables=None):
+            return client.post("/graphql", headers={"Authorization": f"Bearer {token}"},
+                               json={"query": query, "variables": variables or {}}).json()
+        invited = run("mutation($i:MemberInviteInput!){memberInvite(input:$i){success user{id}}}",
+                      {"i": {"name": "Member", "email": "member-team-create@example.test"}})
+        member_id = invited["data"]["memberInvite"]["user"]["id"]
+        created = run("mutation($i:TeamCreateInput!){teamCreate(input:$i){success team{id key members(first:10){nodes{id}}}}}",
+                      {"i": {"name": "Design", "key": "DSG", "memberIds": [member_id]}})
+        assert created["data"]["teamCreate"]["success"] is True, created
+        member_ids = {m["id"] for m in created["data"]["teamCreate"]["team"]["members"]["nodes"]}
+        assert member_id in member_ids
+        bad = run("mutation($i:TeamCreateInput!){teamCreate(input:$i){success}}",
+                  {"i": {"name": "Bad", "key": "BAD", "memberIds": ["missing-user"]}})
+        assert bad.get("errors"), bad
+
+
+def test_bootstrap_returns_team_id_for_onboarding_invite(tmp_path) -> None:
+    from starlette.testclient import TestClient as _TC
+    db_path = tmp_path / "bootstrap-team.db"
+    engine = make_engine(db_path)
+    migrate(engine)
+    with _TC(create_app(str(db_path), open_mode=False)) as client:
+        response = client.post("/onboarding/bootstrap", json={
+            "name": "Owner", "email": "owner-bootstrap@example.test", "password": "a-long-password-123",
+            "workspaceName": "Boot", "workspaceKey": "boot-team", "teamName": "Engineering", "teamKey": "ENG"})
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["teamId"]
+        assert body["apiKey"].startswith("lin_api_")

@@ -403,7 +403,7 @@ input ProjectFilter { id: IDComparator slugId: StringComparator name: StringComp
 input IssueLabelFilter { team: TeamFilter name: StringComparator }
 
 # ---- Mutation inputs ----
-input TeamCreateInput { name: String! key: String! description: String color: String icon: String private: Boolean timezone: String }
+input TeamCreateInput { name: String! key: String! description: String color: String icon: String private: Boolean timezone: String memberIds: [String!] }
 input IssueCreateInput {
   title: String!
   teamId: String!
