@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import os
 import secrets
@@ -22,8 +23,9 @@ from graphql import GraphQLError, OperationDefinitionNode, OperationType, parse
 from sqlalchemy import select, text
 from starlette.applications import Starlette
 from starlette.requests import Request
+from starlette.websockets import WebSocket, WebSocketDisconnect
 from starlette.responses import FileResponse, JSONResponse
-from starlette.routing import Route
+from starlette.routing import Route, WebSocketRoute
 
 from cliniar_server.db import (
     _seed_demo_issues,
@@ -87,6 +89,9 @@ def _valid_public_host(value: str) -> bool:
             re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label)
             for label in labels
         )
+
+
+_MAX_SEQ = 2**63 - 1
 
 
 def create_app(
@@ -278,6 +283,41 @@ def create_app(
 
     from starlette.routing import Mount
 
+    async def realtime_socket(websocket: WebSocket):
+        offered = websocket.scope.get("subprotocols") or []
+        subprotocol = "bearer" if "bearer" in offered else None
+        token_header = ""
+        if subprotocol and len(offered) > 1:
+            token_header = f"Bearer {offered[1]}"
+        websocket.scope["headers"] = [
+            *websocket.scope["headers"],
+            *([(b"authorization", token_header.encode())] if token_header else []),
+        ]
+        uid, org, _identity_id, _is_session = _auth(websocket)
+        if not uid:
+            await websocket.close(code=4401)
+            return
+        await websocket.accept(subprotocol=subprotocol)
+        try:
+            cursor = int(websocket.query_params.get("after", "0"))
+        except ValueError:
+            await websocket.close(code=4400)
+            return
+        if not 0 <= cursor <= _MAX_SEQ:
+            await websocket.close(code=4400)
+            return
+        last_seq = cursor
+        try:
+            while True:
+                events = await asyncio.to_thread(store.change_events_after, org, last_seq)
+                for event in events:
+                    await websocket.send_json(event)
+                    last_seq = event["seq"]
+                if not events:
+                    await asyncio.sleep(1)
+        except WebSocketDisconnect:
+            return
+
     async def graphql_server(request: Request):
         uid, org, identity_id, is_browser_session = _auth(request)
         if not uid:
@@ -292,7 +332,20 @@ def create_app(
                 },
                 status_code=401,
             )
-        data = await request.json()
+        try:
+            data = await request.json()
+        except ValueError:
+            return JSONResponse(
+                {"errors": [{"message": "Request body must be valid JSON.",
+                             "extensions": {"code": "BAD_REQUEST"}}]},
+                status_code=400,
+            )
+        if not isinstance(data, dict):
+            return JSONResponse(
+                {"errors": [{"message": "Request body must be a JSON object.",
+                             "extensions": {"code": "BAD_REQUEST"}}]},
+                status_code=400,
+            )
         if getattr(request.state, "api_key_access", "read_write") == "read":
             try:
                 document = parse(data.get("query") or "")
@@ -723,6 +776,7 @@ def create_app(
     app = Starlette(
         routes=[
             Route("/graphql", graphql_server, methods=["POST", "GET"]),
+            WebSocketRoute("/ws", realtime_socket),
             Route("/auth/setup", auth_setup, methods=["GET", "POST"]),
             Route("/auth/invite/accept", auth_invite_accept, methods=["POST"]),
             Route("/onboarding/status", onboarding_status, methods=["GET"]),
