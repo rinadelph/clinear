@@ -523,3 +523,6 @@ html{font-size:calc(16px * var(--font-scale,1))}
 .sidebar-toggle{flex:none}
 @media(max-width:700px){.sidebar-toggle{display:none}}
 @media(min-width:701px){.app.sidebar-collapsed{grid-template-columns:44px minmax(0,1fr)}.app.sidebar-collapsed .sidebar{width:44px;padding:12px 8px;overflow:hidden}.app.sidebar-collapsed .sidebar-top{justify-content:center;margin-bottom:0}.app.sidebar-collapsed .sidebar-top>:not(.sidebar-toggle),.app.sidebar-collapsed .sidebar nav,.app.sidebar-collapsed .sidebar-bottom{display:none}}
+
+.team-key-badge{display:inline-grid;place-items:center;min-width:24px;height:16px;padding:0 4px;margin-right:6px;border-radius:4px;background:var(--subtle);color:var(--muted);font-size:10px;font-weight:600;letter-spacing:.02em;vertical-align:middle}
+.board-team-filter{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.board-team-filter button{height:28px;padding:0 10px;border:1px solid var(--line);border-radius:999px;background:var(--panel);color:var(--muted);font-size:12px}.board-team-filter button.selected{background:var(--subtle);color:var(--text);font-weight:550}
