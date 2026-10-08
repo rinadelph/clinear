@@ -294,10 +294,10 @@ def create_app(
             *([(b"authorization", token_header.encode())] if token_header else []),
         ]
         uid, org, _identity_id, _is_session = _auth(websocket)
+        await websocket.accept(subprotocol=subprotocol)
         if not uid:
             await websocket.close(code=4401)
             return
-        await websocket.accept(subprotocol=subprotocol)
         try:
             cursor = int(websocket.query_params.get("after", "0"))
         except ValueError:

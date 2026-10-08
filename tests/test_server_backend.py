@@ -1826,8 +1826,8 @@ def test_realtime_socket_replays_changes_after_cursor_and_rejects_bad_auth(tmp_p
         assert resumed[-1]["seq"] == second["seq"]
 
         with pytest.raises(WebSocketDisconnect) as rejected:
-            with client.websocket_connect("/ws?after=0", headers={"Authorization": "Bearer nope"}):
-                pass
+            with client.websocket_connect("/ws?after=0", headers={"Authorization": "Bearer nope"}) as ws:
+                ws.receive_json()
         assert rejected.value.code == 4401
 
 
