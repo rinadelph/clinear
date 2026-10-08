@@ -78,6 +78,7 @@ input MemberInviteInput {
   email: String!
   name: String!
   admin: Boolean = false
+  teamIds: [String!]
 }
 
 type Query {
@@ -124,6 +125,8 @@ type Mutation {
   workspaceUpdate(input: WorkspaceUpdateInput!): OrganizationPayload
   memberInvite(input: MemberInviteInput!): UserPayload
   memberRoleUpdate(userId: String!, admin: Boolean!): UserPayload
+  teamMemberAdd(teamId: String!, userId: String!): UserPayload
+  teamMemberRemove(teamId: String!, userId: String!): UserPayload
   issueCreate(input: IssueCreateInput!): IssuePayload
   issueUpdate(id: String!, input: IssueUpdateInput!): IssuePayload
   notificationMarkRead(id: String!): Boolean!

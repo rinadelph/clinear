@@ -1701,3 +1701,47 @@ def test_read_write_api_key_can_create_issue_with_team_and_project(tmp_path) -> 
             "variables": {"i": {"teamId": team_id, "title": "Agent issue"}}})
         assert created.status_code == 200, created.text
         assert created.json()["data"]["issueCreate"]["success"] is True
+
+
+def test_team_membership_is_granted_on_invite_and_managed_by_admins(tmp_path) -> None:
+    db_path = tmp_path / "team-membership.db"
+    engine = make_engine(db_path)
+    migrate(engine)
+    seeded = seed_tenant(engine, org_name="Membership", org_url_key="membership",
+                         user_email="membership-admin@example.test", token="membership-seed", demo_issues=False)
+    token = seeded["token"]
+    with TestClient(create_app(str(db_path), open_mode=False)) as client:
+        def run(query, variables=None, bearer=token):
+            return client.post("/graphql", headers={"Authorization": f"Bearer {bearer}"},
+                               json={"query": query, "variables": variables or {}}).json()
+
+        teams = run("{teams{nodes{id key}}}")["data"]["teams"]["nodes"]
+        team_id = teams[0]["id"]
+        invited = run("mutation($i:MemberInviteInput!){memberInvite(input:$i){success user{id} apiKey}}",
+                      {"i": {"name": "Robert", "email": "robert-membership@example.test", "teamIds": [team_id]}})
+        robert = invited["data"]["memberInvite"]
+        assert robert["success"] is True
+        robert_id, robert_key = robert["user"]["id"], robert["apiKey"]
+
+        assigned = run("mutation($i:IssueCreateInput!){issueCreate(input:$i){success issue{id}}}",
+                       {"i": {"teamId": team_id, "title": "Assigned to Robert", "assigneeId": robert_id}})
+        assert assigned["data"]["issueCreate"]["success"] is True, assigned
+
+        removed = run("mutation($t:String!,$u:String!){teamMemberRemove(teamId:$t,userId:$u){success}}",
+                      {"t": team_id, "u": robert_id})
+        assert removed["data"]["teamMemberRemove"]["success"] is True
+        rejected = run("mutation($i:IssueCreateInput!){issueCreate(input:$i){success}}",
+                       {"i": {"teamId": team_id, "title": "No longer member", "assigneeId": robert_id}})
+        assert rejected.get("errors"), rejected
+
+        added = run("mutation($t:String!,$u:String!){teamMemberAdd(teamId:$t,userId:$u){success}}",
+                    {"t": team_id, "u": robert_id})
+        assert added["data"]["teamMemberAdd"]["success"] is True
+
+        denied = run("mutation($t:String!,$u:String!){teamMemberAdd(teamId:$t,userId:$u){success}}",
+                     {"t": team_id, "u": robert_id}, bearer=robert_key)
+        assert denied["data"]["teamMemberAdd"]["success"] is False
+
+        bad_team = run("mutation($i:MemberInviteInput!){memberInvite(input:$i){success}}",
+                       {"i": {"name": "X", "email": "x-membership@example.test", "teamIds": ["missing"]}})
+        assert bad_team.get("errors"), bad_team

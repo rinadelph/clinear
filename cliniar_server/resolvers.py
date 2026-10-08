@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 import base64
 import json
 
+from graphql import GraphQLError
 from ariadne import (
     MutationType,
     ObjectType,
@@ -747,12 +748,40 @@ def m_member_invite(_, info, input):
     actor = store.get_user(org, uid)
     if not actor or not actor.get("admin"):
         return {"success": False, "user": None, "apiKey": None}
+    team_ids = input.get("teamIds") or []
+    for team_id in team_ids:
+        if not store.team_by_id_or_key(org, team_id):
+            raise GraphQLError("Team not found", extensions={"code": "BAD_USER_INPUT", "field": "teamIds"})
     created = store.invite_member(org, input.get("name", ""), input.get("email", ""),
-                                  bool(input.get("admin", False)))
+                                  bool(input.get("admin", False)), team_ids)
     if not created:
         return {"success": False, "user": None, "apiKey": None}
     user_row, api_key = created
     return {"success": True, "user": store.ser_user(user_row, uid), "apiKey": api_key}
+
+
+def _set_team_membership(info, team_id, user_id, *, add: bool):
+    store, _w, org, uid = _ctx(info)
+    actor = store.get_user(org, uid)
+    if not actor or not actor.get("admin"):
+        return {"success": False, "user": None, "apiKey": None}
+    if not store.team_by_id_or_key(org, team_id):
+        raise GraphQLError("Team not found", extensions={"code": "BAD_USER_INPUT", "field": "teamId"})
+    target = store.get_user(org, user_id)
+    if not target:
+        raise GraphQLError("User not found", extensions={"code": "BAD_USER_INPUT", "field": "userId"})
+    store.set_team_membership(org, team_id, user_id, add=add)
+    return {"success": True, "user": store.ser_user(store.get_user(org, user_id), uid), "apiKey": None}
+
+
+@mutation.field("teamMemberAdd")
+def m_team_member_add(_, info, teamId, userId):
+    return _set_team_membership(info, teamId, userId, add=True)
+
+
+@mutation.field("teamMemberRemove")
+def m_team_member_remove(_, info, teamId, userId):
+    return _set_team_membership(info, teamId, userId, add=False)
 
 
 @mutation.field("issueCreate")

@@ -746,7 +746,8 @@ class Store:
                 return None
         return self.get_user(org_id, user_id)
 
-    def invite_member(self, org_id: str, name: str, email: str, is_admin: bool = False) -> tuple[dict, str] | None:
+    def invite_member(self, org_id: str, name: str, email: str, is_admin: bool = False,
+                      team_ids: list[str] | None = None) -> tuple[dict, str] | None:
         from cliniar_server.db import api_key as api_key_table, gen_token, new_id, token_hash
 
         normalized_email = email.strip().lower()
@@ -781,6 +782,8 @@ class Store:
                 id=new_id(), token_hash=token_hash(raw_token), label="member invite",
                 user_id=uid, organization_id=org_id, created_at=now,
             ))
+            for team_id in dict.fromkeys(team_ids or []):
+                conn.execute(team_member.insert().values(team_id=team_id, user_id=uid))
         return self.get_user(org_id, uid), raw_token
 
     def workspace(self, org_id: str) -> dict | None:
@@ -863,6 +866,16 @@ class Store:
                 self.ser_state(r)
                 for r in _conn_rows(conn, stmt.order_by(workflow_state.c.position))
             ]
+
+    def set_team_membership(self, org_id: str, team_id: str, user_id: str, *, add: bool) -> None:
+        with self.engine.begin() as conn:
+            exists = conn.execute(select(team_member.c.user_id).where(and_(
+                team_member.c.team_id == team_id, team_member.c.user_id == user_id))).first()
+            if add and not exists:
+                conn.execute(team_member.insert().values(team_id=team_id, user_id=user_id))
+            elif not add and exists:
+                conn.execute(team_member.delete().where(and_(
+                    team_member.c.team_id == team_id, team_member.c.user_id == user_id)))
 
     def team_members(self, org_id: str, team_id: str) -> list[dict]:
         with self.engine.connect() as conn:
