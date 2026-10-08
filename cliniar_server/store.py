@@ -17,6 +17,7 @@ from sqlalchemy.engine import Engine
 
 from cliniar_server.db import (
     api_key,
+    change_event,
     browser_session,
     comment,
     cycle,
@@ -119,6 +120,20 @@ class Store:
         return True
 
     # ------------------------------------------------------------------ auth
+    def change_events_after(self, org_id: str, after_seq: int, limit: int = 200) -> list[dict]:
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                select(change_event)
+                .where(and_(change_event.c.organization_id == org_id, change_event.c.seq > after_seq))
+                .order_by(change_event.c.seq)
+                .limit(limit)
+            ).mappings().all()
+        return [
+            {"seq": r["seq"], "entity": r["entity"], "entityId": r["entity_id"],
+             "action": r["action"], "teamId": r["team_id"]}
+            for r in rows
+        ]
+
     def resolve_token(self, token: str) -> dict | None:
         """token → {user_id, organization_id} or None."""
         th = token_hash(token)

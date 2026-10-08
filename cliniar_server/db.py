@@ -30,7 +30,7 @@ from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import IntegrityError
 
 metadata = MetaData()
-CURRENT_SCHEMA_REVISION = 17
+CURRENT_SCHEMA_REVISION = 19
 
 
 def now_iso() -> str:
@@ -370,6 +370,18 @@ comment = Table(
     Column("archived_at", String),
 )
 
+change_event = Table(
+    "change_event",
+    metadata,
+    Column("seq", Integer, primary_key=True, autoincrement=True),
+    Column("organization_id", String, ForeignKey("organization.id"), nullable=False, index=True),
+    Column("entity", String, nullable=False),
+    Column("entity_id", String, nullable=False),
+    Column("action", String, nullable=False),
+    Column("team_id", String),
+    Column("created_at", String, nullable=False),
+)
+
 issue_activity = Table(
     "issue_activity",
     metadata,
@@ -693,6 +705,97 @@ def _apply_api_key_access(conn):
         )
 
 
+# Non-secret, org-scoped tables whose every write is published as a change event.
+# Secret tables (api_key, sessions, credentials, OAuth, invitations, global identity)
+# are deliberately absent so they can never produce an event.
+_CHANGE_CAPTURE = (
+    # (table, entity, primary key, team_id expression, organization_id expression)
+    # Expressions use {row} for NEW/OLD. None means NULL (no team scope).
+    ("issue", "issue", "id", "{row}.team_id", "{row}.organization_id"),
+    ("comment", "comment", "id", None, "{row}.organization_id"),
+    ("attachment", "attachment", "id", None, "{row}.organization_id"),
+    ("project", "project", "id", None, "{row}.organization_id"),
+    ("project_update", "projectUpdate", "id", None, "{row}.organization_id"),
+    ("initiative", "initiative", "id", None, "{row}.organization_id"),
+    ("cycle", "cycle", "id", "{row}.team_id", "{row}.organization_id"),
+    ("issue_label", "label", "id", "{row}.team_id", "{row}.organization_id"),
+    ("workflow_state", "workflowState", "id", "{row}.team_id", "{row}.organization_id"),
+    ("team", "team", "id", "{row}.id", "{row}.organization_id"),
+    ("team_member", "teamMember", "team_id", "{row}.team_id",
+     "(SELECT organization_id FROM team WHERE id = {row}.team_id)"),
+    ("inbox_notification", "notification", "id", None, "{row}.organization_id"),
+    ("user", "user", "id", None, "{row}.organization_id"),
+    ("organization_membership", "member", "id", None, "{row}.organization_id"),
+)
+
+
+def _change_trigger_sql(dialect: str, table_name: str, entity: str, pk: str,
+                        team_expr: str | None, org_expr: str):
+    """Return one CREATE TRIGGER statement per insert/update/delete for a table."""
+    statements = []
+    for op, label in (("insert", "create"), ("update", "update"), ("delete", "delete")):
+        row = "OLD" if op == "delete" else "NEW"
+        team_value = team_expr.format(row=row) if team_expr else "NULL"
+        org = org_expr.format(row=row)
+        pk_value = f"{row}.{pk}"
+        body = (
+            "INSERT INTO change_event (organization_id, entity, entity_id, action, team_id, created_at) "
+            f"VALUES ({org}, '{entity}', CAST({pk_value} AS TEXT), '{label}', "
+            f"{team_value}, strftime('%Y-%m-%dT%H:%M:%fZ','now'));"
+        )
+        statements.append(
+            f"CREATE TRIGGER IF NOT EXISTS trg_chg_{table_name}_{label} "
+            f"AFTER {op.upper()} ON {table_name} FOR EACH ROW BEGIN {body} END;"
+        )
+    return statements
+
+
+def _postgres_change_trigger_sql(table_name: str, entity: str, pk: str,
+                                 team_expr: str | None, org_expr: str) -> list[str]:
+    """One PL/pgSQL function per table (shared body shape) and one trigger per operation."""
+    function = f"chg_{table_name}"
+    team_new = team_expr.format(row="NEW") if team_expr else "NULL"
+    team_old = team_expr.format(row="OLD") if team_expr else "NULL"
+    org_new = org_expr.format(row="NEW")
+    org_old = org_expr.format(row="OLD")
+    pk_new = f"NEW.{pk}"
+    pk_old = f"OLD.{pk}"
+    statements = [
+        f"""CREATE OR REPLACE FUNCTION {function}() RETURNS trigger LANGUAGE plpgsql AS $fn$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    INSERT INTO change_event (organization_id, entity, entity_id, action, team_id, created_at)
+    VALUES ({org_old}, '{entity}', CAST({pk_old} AS TEXT), 'delete', {team_old},
+            to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"+00:00"'));
+    RETURN OLD;
+  END IF;
+  INSERT INTO change_event (organization_id, entity, entity_id, action, team_id, created_at)
+  VALUES ({org_new}, '{entity}', CAST({pk_new} AS TEXT),
+          CASE WHEN TG_OP = 'INSERT' THEN 'create' ELSE 'update' END, {team_new},
+          to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"+00:00"'));
+  RETURN NEW;
+END;
+$fn$;""",
+        f'DROP TRIGGER IF EXISTS trg_chg_{table_name} ON "{table_name}";',
+        f'CREATE TRIGGER trg_chg_{table_name} AFTER INSERT OR UPDATE OR DELETE ON "{table_name}" '
+        f"FOR EACH ROW EXECUTE FUNCTION {function}();",
+    ]
+    return statements
+
+
+def _apply_realtime_capture(conn):
+    dialect = conn.dialect.name
+    for table_name, entity, pk, team_expr, org_expr in _CHANGE_CAPTURE:
+        if dialect == "sqlite":
+            for statement in _change_trigger_sql(dialect, table_name, entity, pk, team_expr, org_expr):
+                conn.exec_driver_sql(statement)
+        elif dialect == "postgresql":
+            for statement in _postgres_change_trigger_sql(table_name, entity, pk, team_expr, org_expr):
+                conn.exec_driver_sql(statement)
+        else:
+            raise RuntimeError(f"Realtime capture is not implemented for {dialect}")
+
+
 def _apply_api_key_lifecycle(conn):
     existing = {c["name"] for c in inspect(conn).get_columns("api_key")}
     for name, sql_type in (("hint", "VARCHAR"), ("expires_at", "VARCHAR"), ("last_used_at", "VARCHAR")):
@@ -728,6 +831,8 @@ _MIGRATIONS = {
     15: _apply_oauth_security,
     16: _apply_api_key_access,
     17: _apply_api_key_lifecycle,
+    18: lambda conn: change_event.create(conn, checkfirst=True),
+    19: _apply_realtime_capture,
 }
 
 
