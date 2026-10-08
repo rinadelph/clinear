@@ -13,6 +13,7 @@ pytest.importorskip("starlette")
 
 from sqlalchemy import inspect, select
 from starlette.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from cliniar_server.app import create_app
 from cliniar_server.db import (
@@ -1784,3 +1785,113 @@ def test_bootstrap_returns_team_id_for_onboarding_invite(tmp_path) -> None:
         body = response.json()
         assert body["teamId"]
         assert body["apiKey"].startswith("lin_api_")
+
+
+def test_realtime_socket_replays_changes_after_cursor_and_rejects_bad_auth(tmp_path) -> None:
+    db_path = tmp_path / "realtime.db"
+    engine = make_engine(db_path)
+    migrate(engine)
+    seeded = seed_tenant(engine, org_name="Realtime", org_url_key="realtime",
+                         user_email="realtime@example.test", token="realtime-seed", demo_issues=False)
+    token = seeded["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    with TestClient(create_app(str(db_path), open_mode=False)) as client:
+        team_id = client.post("/graphql", headers=headers, json={"query": "{teams{nodes{id}}}"}).json()["data"]["teams"]["nodes"][0]["id"]
+        created = client.post("/graphql", headers=headers, json={
+            "query": "mutation($i:IssueCreateInput!){issueCreate(input:$i){success issue{id}}}",
+            "variables": {"i": {"teamId": team_id, "title": "Realtime issue"}}}).json()
+        issue_id = created["data"]["issueCreate"]["issue"]["id"]
+        client.post("/graphql", headers=headers, json={
+            "query": "mutation($id:String!,$i:IssueUpdateInput!){issueUpdate(id:$id,input:$i){success}}",
+            "variables": {"id": issue_id, "i": {"title": "Renamed"}}})
+
+        with client.websocket_connect(f"/ws?after=0", headers=headers) as ws:
+            events = []
+            while True:
+                event = ws.receive_json()
+                events.append(event)
+                if event["entity"] == "issue" and event["action"] == "update":
+                    break
+        issue_events = [e for e in events if e["entity"] == "issue"]
+        assert [e["action"] for e in issue_events] == ["create", "update"]
+        assert all(e["entityId"] == issue_id for e in issue_events)
+        first, second = issue_events
+        assert first["seq"] < second["seq"]
+
+        with client.websocket_connect(f"/ws?after={first['seq']}", headers=headers) as ws:
+            resumed = []
+            while not resumed or resumed[-1]["seq"] < second["seq"]:
+                resumed.append(ws.receive_json())
+        assert all(e["seq"] > first["seq"] for e in resumed)
+        assert resumed[-1]["seq"] == second["seq"]
+
+        with pytest.raises(WebSocketDisconnect) as rejected:
+            with client.websocket_connect("/ws?after=0", headers={"Authorization": "Bearer nope"}):
+                pass
+        assert rejected.value.code == 4401
+
+
+def test_realtime_capture_covers_comments_projects_labels_and_project_updates(tmp_path) -> None:
+    db_path = tmp_path / "realtime-coverage.db"
+    engine = make_engine(db_path)
+    migrate(engine)
+    seeded = seed_tenant(engine, org_name="Coverage", org_url_key="coverage",
+                         user_email="coverage@example.test", token="coverage-seed", demo_issues=False)
+    headers = {"Authorization": f"Bearer {seeded['token']}"}
+    with TestClient(create_app(str(db_path), open_mode=False)) as client:
+        def gql(query, variables=None):
+            body = client.post("/graphql", headers=headers, json={"query": query, "variables": variables or {}}).json()
+            assert "errors" not in body, body
+            return body["data"]
+
+        team_id = gql("{teams{nodes{id}}}")["teams"]["nodes"][0]["id"]
+        issue_id = gql("mutation($i:IssueCreateInput!){issueCreate(input:$i){issue{id}}}",
+                       {"i": {"teamId": team_id, "title": "Covered"}})["issueCreate"]["issue"]["id"]
+        gql("mutation($i:CommentCreateInput!){commentCreate(input:$i){success}}",
+            {"i": {"issueId": issue_id, "body": "hi"}})
+        gql("mutation($i:IssueLabelCreateInput!){issueLabelCreate(input:$i){success}}",
+            {"i": {"name": "bug", "color": "#ff0000"}})
+        project_id = gql("mutation($i:ProjectCreateInput!){projectCreate(input:$i){project{id}}}",
+                         {"i": {"name": "Launch", "teamIds": [team_id]}})["projectCreate"]["project"]["id"]
+        gql("mutation($i:ProjectUpdateCreateInput!){projectUpdateCreate(input:$i){success}}",
+            {"i": {"projectId": project_id, "body": "On track"}})
+
+        with client.websocket_connect("/ws?after=0", headers=headers) as ws:
+            seen = set()
+            while not {"comment", "label", "project", "projectUpdate"} <= seen:
+                seen.add(ws.receive_json()["entity"])
+        assert {"comment", "label", "project", "projectUpdate"} <= seen
+
+
+def test_graphql_rejects_malformed_bodies_with_400_and_keeps_valid_requests(tmp_path) -> None:
+    db_path = tmp_path / "graphql-bodies.db"
+    engine = make_engine(db_path)
+    migrate(engine)
+    seeded = seed_tenant(engine, org_name="Bodies", org_url_key="bodies",
+                         user_email="bodies@example.test", token="bodies-seed", demo_issues=False)
+    headers = {"Authorization": f"Bearer {seeded['token']}", "Content-Type": "application/json"}
+    with TestClient(create_app(str(db_path), open_mode=False)) as client:
+        malformed = client.post("/graphql", headers=headers, content=b"{not json")
+        assert malformed.status_code == 400
+        assert malformed.json()["errors"][0]["extensions"]["code"] == "BAD_REQUEST"
+
+        not_object = client.post("/graphql", headers=headers, content=b"[1,2,3]")
+        assert not_object.status_code == 400
+
+        valid = client.post("/graphql", headers=headers, json={"query": "{viewer{id}}"})
+        assert valid.status_code == 200
+        assert valid.json()["data"]["viewer"]["id"]
+
+
+def test_realtime_socket_rejects_out_of_range_cursors(tmp_path) -> None:
+    db_path = tmp_path / "realtime-cursor.db"
+    engine = make_engine(db_path)
+    migrate(engine)
+    seed_tenant(engine, org_name="Cursor", org_url_key="cursor",
+                user_email="cursor@example.test", token="cursor-seed", demo_issues=False)
+    with TestClient(create_app(str(db_path), open_mode=False)) as client:
+        for cursor in ["99999999999999999999999", "-5", "abc", "1.5"]:
+            with pytest.raises(WebSocketDisconnect) as closed:
+                with client.websocket_connect(f"/ws?after={cursor}", headers={"Authorization": "Bearer cursor-seed"}) as ws:
+                    ws.receive_json()
+            assert closed.value.code == 4400, cursor
