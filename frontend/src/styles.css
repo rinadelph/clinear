@@ -578,3 +578,5 @@ html{font-size:calc(16px * var(--font-scale,1))}
   .team-scoped-page--board .kanban-column,.my-issues-view .kanban-column{height:100%;min-height:0}
   .team-scoped-page--board .kanban-cards,.my-issues-view .kanban-cards{min-height:0;overflow-y:auto}
 }
+@media(max-width:700px){.main:has(.my-issues-view){display:flex;flex-direction:column}.my-issues-view{flex:1;min-height:0;height:auto;display:flex;flex-direction:column}}
+@media(max-width:700px){.my-issues-view>.my-issues-list{flex:1;min-height:0;height:auto;display:flex;flex-direction:column}}
