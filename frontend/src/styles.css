@@ -551,3 +551,5 @@ html{font-size:calc(16px * var(--font-scale,1))}
 .sidebar .nav-group-your-teams .team-block:first-of-type{margin-top:8px}
 
 .projects-heading-actions{display:flex;align-items:center;gap:8px}
+
+.page-loading{padding:40px 0;text-align:center;color:var(--muted);font-size:13px}
