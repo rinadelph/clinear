@@ -564,3 +564,17 @@ html{font-size:calc(16px * var(--font-scale,1))}
 .app:has(.my-issues-view) .my-issues-head{flex:none}
 .app:has(.team-scoped-page--board) .main{padding:0}
 @media(min-width:701px){.workspace-content:has(.my-issues-view) .main{margin:0;height:100%;max-height:100%}}
+
+/* Mobile board views: fill the viewport below the 60px topbar; columns and cards scroll inside the board. */
+@media(max-width:700px){
+  .app:has(.team-scoped-page--board),.app:has(.my-issues-view){height:100dvh;display:flex;flex-direction:column;overflow:hidden}
+  .app:has(.team-scoped-page--board) .app-body,.app:has(.my-issues-view) .app-body{display:flex;flex:1;min-height:0;overflow:hidden}
+  .app:has(.team-scoped-page--board) .workspace-content,.app:has(.my-issues-view) .workspace-content{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+  .app:has(.team-scoped-page--board) .main,.app:has(.my-issues-view) .main{flex:1;min-height:0;height:auto;display:flex;flex-direction:column;overflow:hidden}
+  .team-scoped-page--board{flex:1;min-height:0;height:auto;padding:0}
+  .team-scoped-page--board .issues-board,.my-issues-view .issues-board{flex:1;min-height:0;display:flex;flex-direction:column}
+  .team-scoped-page--board .kanban,.my-issues-view .kanban{flex:1;min-height:0;height:auto}
+  .team-scoped-page--board .kanban-columns,.my-issues-view .kanban-columns{flex:1;min-height:0;height:auto}
+  .team-scoped-page--board .kanban-column,.my-issues-view .kanban-column{height:100%;min-height:0}
+  .team-scoped-page--board .kanban-cards,.my-issues-view .kanban-cards{min-height:0;overflow-y:auto}
+}
