@@ -545,3 +545,9 @@ html{font-size:calc(16px * var(--font-scale,1))}
 .team-scoped-page--board>.issues-board{flex:1;min-height:0;display:flex;flex-direction:column}
 .team-scoped-page--board>.issues-board>.kanban{flex:1;height:auto;min-height:0}
 .team-scoped-page--board .kanban-columns{flex:1;min-height:0}
+.sidebar .team-row .team-name{gap:8px;padding:0 9px}
+.sidebar .team-row .team-name svg{width:15px;height:15px;flex:none}
+.sidebar .nav-group-your-teams .team-block{margin-bottom:4px}
+.sidebar .nav-group-your-teams .team-block:first-of-type{margin-top:8px}
+
+.projects-heading-actions{display:flex;align-items:center;gap:8px}
